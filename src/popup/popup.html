@@ -31,6 +31,22 @@
 
     <section class="section">
       <div class="section-heading">
+        <h2>最近休眠</h2>
+        <span id="recent-count" class="count-label"></span>
+      </div>
+      <div id="recent-suspensions" class="list empty-state">暂无可撤销的休眠操作。</div>
+    </section>
+
+    <section class="section">
+      <div class="section-heading">
+        <h2>恢复点</h2>
+        <button id="create-checkpoint" class="quiet-button" type="button">保存当前状态</button>
+      </div>
+      <div id="checkpoints" class="list empty-state">恢复点会每 30 分钟自动保存。</div>
+    </section>
+
+    <section class="section">
+      <div class="section-heading">
         <h2>智能整理</h2>
         <span id="suggestion-count" class="count-label"></span>
       </div>

@@ -1,6 +1,6 @@
-import { ALARM_NAME, ALARM_PERIOD_MINUTES, SUSPENDED_PAGE, SUSPENSION_STATES } from "../shared/constants.js";
+import { ALARM_NAME, ALARM_PERIOD_MINUTES, CHECKPOINT_ALARM_NAME, CHECKPOINT_PERIOD_MINUTES, SUSPENDED_PAGE, SUSPENSION_STATES } from "../shared/constants.js";
 import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isSuspendableUrl, isSuspendedUrl, normalizeDomain, planLocalOrganization, suspensionBlockReason } from "../shared/policy.js";
-import { addWorkspace, getActivity, getObservedAt, getRecord, getRecords, getSettings, getWorkspaces, putRecord, removeActivity, removePrimaryRecord, removeRecord, removeRecordsForTab, saveSettings, touchTab, updateWorkspace } from "../shared/storage.js";
+import { addRecentSuspension, addRecoveryCheckpoint, addWorkspace, getActivity, getObservedAt, getRecentSuspensions, getRecord, getRecords, getRecoveryCheckpoints, getSettings, getWorkspaces, putRecord, removeActivity, removePrimaryRecord, removeRecentSuspension, removeRecord, removeRecordsForTab, saveSettings, touchTab, updateWorkspace } from "../shared/storage.js";
 
 const extensionOrigin = chrome.runtime.getURL("").replace(/\/$/, "");
 const tabQueues = new Map();
@@ -31,6 +31,11 @@ function sanitizeSettings(current, update) {
 async function ensureAlarm() {
   const alarm = await chrome.alarms.get(ALARM_NAME);
   if (!alarm) await chrome.alarms.create(ALARM_NAME, { periodInMinutes: ALARM_PERIOD_MINUTES });
+}
+
+async function ensureCheckpointAlarm() {
+  const alarm = await chrome.alarms.get(CHECKPOINT_ALARM_NAME);
+  if (!alarm) await chrome.alarms.create(CHECKPOINT_ALARM_NAME, { periodInMinutes: CHECKPOINT_PERIOD_MINUTES });
 }
 
 async function recordExistingTabs() {
@@ -92,7 +97,9 @@ async function suspendTab(tabId, reason = "manual", allowProtected = false) {
       await removeRecord(recordId);
       return { ok: false, reason: "浏览器未能卸载该标签页" };
     }
-    await putRecord({ ...record, mode: "native-discard", state: SUSPENSION_STATES.SUSPENDED });
+    const suspendedRecord = { ...record, mode: "native-discard", state: SUSPENSION_STATES.SUSPENDED };
+    await putRecord(suspendedRecord);
+    await addRecentSuspension(suspendedRecord);
     return { ok: true, recordId };
   });
 }
@@ -112,6 +119,7 @@ async function restoreRecord(recordId, senderTabId) {
       }
       await chrome.tabs.reload(tabId);
       await removeRecord(recordId);
+      await removeRecentSuspension(recordId);
       await touchTab(tabId);
       return { ok: true };
     }
@@ -138,6 +146,43 @@ async function processIdleTabs() {
     if (!tab.id || suspensionBlockReason(tab, settings, extensionOrigin)) continue;
     if (await isIdleEnough(tab.id, thresholdMs)) await suspendTab(tab.id, "idle");
   }
+}
+
+async function createRecoveryCheckpoint() {
+  const tabs = await chrome.tabs.query({});
+  const checkpointTabs = tabs
+    .filter((tab) => isSuspendableUrl(tab.url))
+    .map((tab) => ({ title: tab.title || domainForUrl(tab.url), url: tab.url }));
+  if (!checkpointTabs.length) return { ok: true, count: 0 };
+  const checkpoints = await addRecoveryCheckpoint({
+    id: crypto.randomUUID(),
+    createdAt: Date.now(),
+    tabs: checkpointTabs
+  });
+  return { ok: true, count: checkpointTabs.length, checkpoints: checkpoints.length };
+}
+
+async function restoreRecentSuspension(recordId) {
+  const recent = await getRecentSuspensions();
+  const record = recent.find((item) => item.recordId === recordId);
+  if (!record) return { ok: false, reason: "最近休眠记录不存在" };
+  const tab = await chrome.tabs.get(record.tabId).catch(() => null);
+  if (tab && tab.url === record.originalUrl && tab.discarded) {
+    await chrome.tabs.reload(tab.id);
+  } else {
+    await chrome.tabs.create({ url: record.originalUrl, active: true });
+  }
+  await removeRecentSuspension(recordId);
+  await removeRecord(recordId);
+  return { ok: true };
+}
+
+async function restoreCheckpoint(checkpointId) {
+  const checkpoints = await getRecoveryCheckpoints();
+  const checkpoint = checkpoints.find((item) => item.id === checkpointId);
+  if (!checkpoint) return { ok: false, reason: "恢复点不存在" };
+  for (const item of checkpoint.tabs) await chrome.tabs.create({ url: item.url, active: false });
+  return { ok: true, count: checkpoint.tabs.length };
 }
 
 async function getDashboard() {
@@ -255,14 +300,17 @@ async function importBackup(backup) {
 
 chrome.runtime.onInstalled.addListener(async () => {
   await ensureAlarm();
+  await ensureCheckpointAlarm();
   await recordExistingTabs();
 });
 chrome.runtime.onStartup.addListener(async () => {
   await ensureAlarm();
+  await ensureCheckpointAlarm();
   await rebindSuspendedTabs();
 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM_NAME) processIdleTabs().catch(console.error);
+  if (alarm.name === CHECKPOINT_ALARM_NAME) createRecoveryCheckpoint().catch(console.error);
 });
 chrome.tabs.onActivated.addListener(({ tabId }) => touchTab(tabId));
 chrome.tabs.onRemoved.addListener(async (tabId) => {
@@ -277,7 +325,10 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     const record = Object.values(records).find((item) => item.tabId === tabId);
     if (record && isExpectedSuspensionUrl(tab.url, extensionOrigin, record.recordId)) return;
     if (isSuspendedUrl(tab.url, extensionOrigin)) return;
-    if (record) await removePrimaryRecord(record.recordId);
+    if (record) {
+      await removePrimaryRecord(record.recordId);
+      if (record.mode === "native-discard") await removeRecentSuspension(record.recordId);
+    }
     await touchTab(tabId);
   })().catch(console.error);
 });
@@ -312,6 +363,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return workspace;
     },
     getWorkspaces,
+    getRecentSuspensions,
+    getRecoveryCheckpoints,
+    createRecoveryCheckpoint,
+    restoreRecentSuspension: () => restoreRecentSuspension(message.recordId),
+    restoreCheckpoint: () => restoreCheckpoint(message.checkpointId),
     exportBackup: async () => ({
       schemaVersion: 1,
       exportedAt: Date.now(),

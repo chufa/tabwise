@@ -4,6 +4,8 @@ const keys = Object.freeze({
   settings: "settings",
   records: "suspensionRecords",
   restoreRecords: "suspensionRestoreRecords",
+  recentSuspensions: "recentSuspensions",
+  recoveryCheckpoints: "recoveryCheckpoints",
   activity: "lastActivity",
   observedAt: "firstObservedAt",
   workspaces: "workspaces"
@@ -107,4 +109,36 @@ export async function updateWorkspace(workspaceId, update) {
   workspaces.sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) || right.createdAt - left.createdAt);
   await chrome.storage.local.set({ [keys.workspaces]: workspaces });
   return workspaces.find((workspace) => workspace.id === workspaceId);
+}
+
+export async function getRecentSuspensions() {
+  const { [keys.recentSuspensions]: recent = [] } = await chrome.storage.local.get(keys.recentSuspensions);
+  return recent;
+}
+
+export async function addRecentSuspension(record) {
+  const recent = await getRecentSuspensions();
+  const next = [record, ...recent.filter((item) => item.recordId !== record.recordId)].slice(0, 20);
+  await chrome.storage.local.set({ [keys.recentSuspensions]: next });
+  return next;
+}
+
+export async function removeRecentSuspension(recordId) {
+  const recent = await getRecentSuspensions();
+  await chrome.storage.local.set({ [keys.recentSuspensions]: recent.filter((item) => item.recordId !== recordId) });
+}
+
+export async function getRecoveryCheckpoints() {
+  const { [keys.recoveryCheckpoints]: checkpoints = [] } = await chrome.storage.local.get(keys.recoveryCheckpoints);
+  return checkpoints;
+}
+
+export async function addRecoveryCheckpoint(checkpoint) {
+  const checkpoints = await getRecoveryCheckpoints();
+  const signature = checkpoint.tabs.map((tab) => tab.url).sort().join("\n");
+  const duplicate = checkpoints.some((item) => item.tabs.map((tab) => tab.url).sort().join("\n") === signature);
+  if (duplicate) return checkpoints;
+  const next = [checkpoint, ...checkpoints].slice(0, 10);
+  await chrome.storage.local.set({ [keys.recoveryCheckpoints]: next });
+  return next;
 }

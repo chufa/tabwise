@@ -1,5 +1,7 @@
 export const ALARM_NAME = "tabwise-idle-check";
 export const ALARM_PERIOD_MINUTES = 1;
+export const CHECKPOINT_ALARM_NAME = "tabwise-checkpoint";
+export const CHECKPOINT_PERIOD_MINUTES = 30;
 export const SUSPENDED_PAGE = "src/suspended/suspended.html";
 export const SCHEMA_VERSION = 1;
 export const DEFAULT_SETTINGS = Object.freeze({

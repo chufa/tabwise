@@ -24,7 +24,17 @@ globalThis.chrome = {
   }
 };
 
-const { getRecord, putRecord, removePrimaryRecord, removeRecord, removeRecordsForTab } = await import("../src/shared/storage.js");
+const {
+  addRecentSuspension,
+  addRecoveryCheckpoint,
+  getRecentSuspensions,
+  getRecoveryCheckpoints,
+  getRecord,
+  putRecord,
+  removePrimaryRecord,
+  removeRecord,
+  removeRecordsForTab
+} = await import("../src/shared/storage.js");
 
 test("keeps a restore record when its primary dashboard record is cleared", async () => {
   const record = { recordId: "record-1", tabId: 7, originalUrl: "https://example.com", title: "Example" };
@@ -40,4 +50,33 @@ test("removes both record copies when the tab closes", async () => {
   await putRecord(record);
   await removeRecordsForTab(record.tabId);
   assert.equal(await getRecord(record.recordId), undefined);
+});
+
+test("keeps the 20 most recent suspension entries", async () => {
+  for (let index = 0; index < 22; index += 1) {
+    await addRecentSuspension({ recordId: `recent-${index}`, originalUrl: `https://example.com/${index}`, suspendedAt: index });
+  }
+  const history = await getRecentSuspensions();
+  assert.equal(history.length, 20);
+  assert.equal(history[0].recordId, "recent-21");
+  assert.equal(history.at(-1).recordId, "recent-2");
+});
+
+test("deduplicates recovery checkpoints and retains the latest ten", async () => {
+  for (let index = 0; index < 11; index += 1) {
+    await addRecoveryCheckpoint({
+      id: `checkpoint-${index}`,
+      createdAt: index,
+      tabs: [{ title: `Tab ${index}`, url: `https://example.com/${index}` }]
+    });
+  }
+  await addRecoveryCheckpoint({
+    id: "duplicate",
+    createdAt: 12,
+    tabs: [{ title: "Tab 10", url: "https://example.com/10" }]
+  });
+  const checkpoints = await getRecoveryCheckpoints();
+  assert.equal(checkpoints.length, 10);
+  assert.equal(checkpoints[0].id, "checkpoint-10");
+  assert.equal(checkpoints.some((checkpoint) => checkpoint.id === "duplicate"), false);
 });

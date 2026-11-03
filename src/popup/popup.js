@@ -1,7 +1,7 @@
 import { escapeHtml } from "../shared/html.js";
 
 const $ = (selector) => document.querySelector(selector);
-const state = { data: null, filter: "all", search: "", workspaceSearch: "", workspaces: [], expandedSuggestions: new Set() };
+const state = { data: null, filter: "all", search: "", workspaceSearch: "", workspaces: [], recent: [], checkpoints: [], expandedSuggestions: new Set() };
 
 function formatRelativeTime(timestamp) {
   if (!timestamp) return "刚开始追踪";
@@ -134,6 +134,33 @@ function renderTabs() {
   }).join("") || "没有符合当前筛选条件的标签页。";
 }
 
+function renderRecovery() {
+  $("#recent-count").textContent = state.recent.length ? `${state.recent.length} 项` : "";
+  $("#recent-suspensions").className = state.recent.length ? "list" : "list empty-state";
+  $("#recent-suspensions").innerHTML = state.recent.slice(0, 3).map((record) => row({
+    title: record.title || record.originalUrl,
+    subtitle: `${domainForRecord(record.originalUrl)} · 休眠于 ${new Date(record.suspendedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+    action: { type: "restore-recent", label: "撤销" },
+    id: record.recordId
+  })).join("") || "暂无可撤销的休眠操作。";
+
+  $("#checkpoints").className = state.checkpoints.length ? "list" : "list empty-state";
+  $("#checkpoints").innerHTML = state.checkpoints.slice(0, 3).map((checkpoint) => row({
+    title: `${checkpoint.tabs.length} 个标签页`,
+    subtitle: new Date(checkpoint.createdAt).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }),
+    action: { type: "restore-checkpoint", label: "打开" },
+    id: checkpoint.id
+  })).join("") || "恢复点会每 30 分钟自动保存。";
+}
+
+function domainForRecord(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "已保存页面";
+  }
+}
+
 async function render() {
   state.data = await send({ type: "getDashboard" });
   const { tabs, summary, organization } = state.data;
@@ -147,6 +174,11 @@ async function render() {
   renderAutomationState(state.data.settings);
   renderSuggestions(organization);
   renderTabs();
+  [state.recent, state.checkpoints] = await Promise.all([
+    send({ type: "getRecentSuspensions" }),
+    send({ type: "getRecoveryCheckpoints" })
+  ]);
+  renderRecovery();
 
   state.workspaces = await send({ type: "getWorkspaces" });
   const normalizedSearch = state.workspaceSearch.trim().toLowerCase();
@@ -177,6 +209,15 @@ document.body.addEventListener("click", async (event) => {
   }
   if (action === "trust") result = await send({ type: "trustDomain", url: state.data.tabs.find((tab) => tab.id === Number(id))?.url });
   if (action === "focus-tab") result = await send({ type: "focusTab", tabId: Number(id) });
+  if (action === "restore-recent") result = await send({ type: "restoreRecentSuspension", recordId: id });
+  if (action === "restore-checkpoint") {
+    const checkpoint = state.checkpoints.find((item) => item.id === id);
+    if (checkpoint?.tabs.length > 10 && !window.confirm(`该恢复点包含 ${checkpoint.tabs.length} 个标签页，打开后可能增加浏览器负载。是否继续？`)) {
+      button.disabled = false;
+      return;
+    }
+    result = await send({ type: "restoreCheckpoint", checkpointId: id });
+  }
   if (action === "open-workspace") {
     const workspace = state.workspaces.find((item) => item.id === id);
     if (workspace?.tabs.length > 10 && !window.confirm(`该工作区包含 ${workspace.tabs.length} 个标签页，打开后可能增加浏览器负载。是否继续？`)) {
@@ -203,6 +244,11 @@ $("#pause-automation").addEventListener("click", async () => {
   const paused = state.data.settings.pauseUntil > Date.now();
   const result = await send({ type: "pauseAutomation", minutes: paused ? 0 : 60 });
   setFeedback(result.ok ? paused ? "已恢复自动休眠" : "自动休眠已暂停 1 小时" : result.reason, !result.ok);
+  await render();
+});
+$("#create-checkpoint").addEventListener("click", async () => {
+  const result = await send({ type: "createRecoveryCheckpoint" });
+  setFeedback(result.ok ? result.count ? `已保存 ${result.count} 个标签页` : "当前没有可保存的网页标签" : result.reason, !result.ok);
   await render();
 });
 $("#suspend-eligible").addEventListener("click", async () => {
