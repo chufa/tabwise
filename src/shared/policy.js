@@ -53,6 +53,25 @@ export function suspensionBlockReason(tab, settings, extensionOrigin) {
   return "";
 }
 
+export function smartSuspensionBlockReason(tab, settings, extensionOrigin, protection) {
+  if (!tab?.id) return "Tab is unavailable";
+  if (tab.active) return "Active tab";
+  if (tab.pinned) return "Pinned tab";
+  if (tab.audible) return "Playing audio";
+  if (tab.status === "loading") return "Still loading";
+  if (tab.discarded) return "Already discarded by browser";
+  if (!isSuspendableUrl(tab.url)) return "Not a web page";
+  if (isSuspendedUrl(tab.url, extensionOrigin)) return "Already suspended";
+
+  const domain = domainForUrl(tab.url);
+  if (matchesDomain(domain, settings.blockedDomains || [])) return "Never suspend domain";
+  if (!protection?.ready) return "Protection status unknown";
+  if (protection.dirty) return "Unsaved edits";
+  if (protection.upload) return "Upload in progress";
+  if (protection.media) return "Media activity";
+  return "";
+}
+
 export function directSuspensionBlockReason(tab, extensionOrigin) {
   if (!tab?.id) return "Tab is unavailable";
   if (tab.active) return "Active tab";

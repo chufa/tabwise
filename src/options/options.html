@@ -10,9 +10,20 @@
     <main>
       <header>
         <h1>休眠设置</h1>
-        <p>TabWise 只会自动休眠你明确允许的网站，其他页面默认保持受保护状态。</p>
+        <p>选择适合你的自动策略。默认采用保守模式，避免对未知网页做自动操作。</p>
       </header>
       <form id="settings-form">
+        <section class="setting-group">
+          <h2>自动策略</h2>
+          <label class="mode-option" for="mode-conservative">
+            <input id="mode-conservative" name="suspension-mode" type="radio" value="conservative">
+            <span><strong>保守模式</strong><small>仅自动休眠可信网站。其他网页保持已保护状态。</small></span>
+          </label>
+          <label class="mode-option" for="mode-smart">
+            <input id="mode-smart" name="suspension-mode" type="radio" value="smart">
+            <span><strong>智能保护模式</strong><small>默认检查所有网页；检测到编辑、文件选择或媒体活动时保护。启用时会请求网页访问权限。</small></span>
+          </label>
+        </section>
         <section class="setting-group">
           <h2>自动休眠</h2>
           <label class="switch-row" for="auto-suspend">
@@ -26,7 +37,7 @@
         </section>
         <section class="setting-group">
           <h2>可信网站</h2>
-          <p class="section-copy">每行一个域名。只有这些网站的标签页才会进入自动休眠；子域名会一并匹配。</p>
+          <p class="section-copy">每行一个域名。保守模式下，只有这些网站会自动休眠；智能保护模式下，此列表不再限制自动休眠。</p>
           <label class="visually-hidden" for="trusted-domains">可信网站域名</label>
           <textarea id="trusted-domains" rows="6" spellcheck="false" placeholder="docs.example.com&#10;news.example.com"></textarea>
         </section>

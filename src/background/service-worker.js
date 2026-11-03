@@ -1,9 +1,12 @@
-import { ALARM_NAME, ALARM_PERIOD_MINUTES, CHECKPOINT_ALARM_NAME, CHECKPOINT_PERIOD_MINUTES, SUSPENDED_PAGE, SUSPENSION_STATES } from "../shared/constants.js";
-import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isSuspendableUrl, isSuspendedUrl, normalizeDomain, planLocalOrganization, suspensionBlockReason } from "../shared/policy.js";
+import { ALARM_NAME, ALARM_PERIOD_MINUTES, CHECKPOINT_ALARM_NAME, CHECKPOINT_PERIOD_MINUTES, SUSPENDED_PAGE, SUSPENSION_MODES, SUSPENSION_STATES } from "../shared/constants.js";
+import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isSuspendableUrl, isSuspendedUrl, normalizeDomain, planLocalOrganization, smartSuspensionBlockReason, suspensionBlockReason } from "../shared/policy.js";
 import { addRecentSuspension, addRecoveryCheckpoint, addWorkspace, getActivity, getObservedAt, getRecentSuspensions, getRecord, getRecords, getRecoveryCheckpoints, getSettings, getWorkspaces, putRecord, removeActivity, removePrimaryRecord, removeRecentSuspension, removeRecord, removeRecordsForTab, saveSettings, touchTab, updateWorkspace } from "../shared/storage.js";
 
 const extensionOrigin = chrome.runtime.getURL("").replace(/\/$/, "");
 const tabQueues = new Map();
+const PAGE_PROTECTION_KEY = "pageProtectionStates";
+const PAGE_PROTECTION_SCRIPT_ID = "tabwise-page-protection";
+const SMART_ORIGINS = ["http://*/*", "https://*/*"];
 
 function runForTab(tabId, work) {
   const previous = tabQueues.get(tabId) || Promise.resolve();
@@ -22,10 +25,65 @@ function sanitizeSettings(current, update) {
   return {
     idleMinutes: Number.isFinite(idleMinutes) ? Math.min(1440, Math.max(5, Math.round(idleMinutes))) : current.idleMinutes,
     autoSuspend: typeof update.autoSuspend === "boolean" ? update.autoSuspend : current.autoSuspend,
+    suspensionMode: update.suspensionMode === SUSPENSION_MODES.SMART || update.suspensionMode === SUSPENSION_MODES.CONSERVATIVE
+      ? update.suspensionMode
+      : current.suspensionMode,
     trustedDomains: Array.isArray(update.trustedDomains) ? normalizeList(update.trustedDomains) : current.trustedDomains,
     blockedDomains: Array.isArray(update.blockedDomains) ? normalizeList(update.blockedDomains) : current.blockedDomains,
     pauseUntil: Number.isFinite(pauseUntil) && pauseUntil > Date.now() ? pauseUntil : 0
   };
+}
+
+async function getProtectionStates() {
+  const { [PAGE_PROTECTION_KEY]: states = {} } = await chrome.storage.session.get(PAGE_PROTECTION_KEY);
+  return states;
+}
+
+async function setProtectionState(tabId, state) {
+  const states = await getProtectionStates();
+  states[tabId] = { ...state, updatedAt: Date.now() };
+  await chrome.storage.session.set({ [PAGE_PROTECTION_KEY]: states });
+}
+
+async function removeProtectionState(tabId) {
+  const states = await getProtectionStates();
+  delete states[tabId];
+  await chrome.storage.session.set({ [PAGE_PROTECTION_KEY]: states });
+}
+
+async function registerProtectionScript() {
+  const scripts = await chrome.scripting.getRegisteredContentScripts({ ids: [PAGE_PROTECTION_SCRIPT_ID] });
+  if (scripts.length) return;
+  await chrome.scripting.registerContentScripts([{
+    id: PAGE_PROTECTION_SCRIPT_ID,
+    js: ["src/content/protection.js"],
+    matches: SMART_ORIGINS,
+    runAt: "document_start",
+    allFrames: false,
+    persistAcrossSessions: true
+  }]);
+}
+
+async function initializeExistingProtection() {
+  const tabs = await chrome.tabs.query({});
+  await Promise.all(tabs
+    .filter((tab) => tab.id && isSuspendableUrl(tab.url))
+    .map((tab) => chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["src/content/protection.js"] }).catch(() => {})));
+}
+
+async function setSuspensionMode(mode) {
+  const settings = await getSettings();
+  if (mode === SUSPENSION_MODES.SMART) {
+    const granted = await chrome.permissions.contains({ origins: SMART_ORIGINS });
+    if (!granted) return { ok: false, reason: "未授予网页保护权限，已保留保守模式" };
+    await registerProtectionScript();
+    await initializeExistingProtection();
+  } else {
+    await chrome.scripting.unregisterContentScripts({ ids: [PAGE_PROTECTION_SCRIPT_ID] }).catch(() => {});
+    await chrome.storage.session.remove(PAGE_PROTECTION_KEY);
+  }
+  await saveSettings({ ...settings, suspensionMode: mode });
+  return { ok: true, mode };
 }
 
 async function ensureAlarm() {
@@ -141,9 +199,13 @@ async function processIdleTabs() {
   if (!settings.autoSuspend || settings.pauseUntil > Date.now()) return;
 
   const tabs = await chrome.tabs.query({});
+  const protectionStates = settings.suspensionMode === SUSPENSION_MODES.SMART ? await getProtectionStates() : {};
   const thresholdMs = settings.idleMinutes * 60_000;
   for (const tab of tabs.slice(0, 50)) {
-    if (!tab.id || suspensionBlockReason(tab, settings, extensionOrigin)) continue;
+    const blockReason = settings.suspensionMode === SUSPENSION_MODES.SMART
+      ? smartSuspensionBlockReason(tab, settings, extensionOrigin, protectionStates[tab.id])
+      : suspensionBlockReason(tab, settings, extensionOrigin);
+    if (!tab.id || blockReason) continue;
     if (await isIdleEnough(tab.id, thresholdMs)) await suspendTab(tab.id, "idle");
   }
 }
@@ -186,13 +248,17 @@ async function restoreCheckpoint(checkpointId) {
 }
 
 async function getDashboard() {
-  const [settings, records, tabs, activity, observedAt] = await Promise.all([getSettings(), getRecords(), chrome.tabs.query({}), getActivity(), getObservedAt()]);
+  const [settings, records, tabs, activity, observedAt, protectionStates] = await Promise.all([getSettings(), getRecords(), chrome.tabs.query({}), getActivity(), getObservedAt(), getProtectionStates()]);
   const recordsByTab = new Map(Object.values(records).map((record) => [record.tabId, record]));
   const rows = tabs.map((tab) => {
     const record = recordsByTab.get(tab.id);
     const legacySuspended = Boolean(record && isSuspendedUrl(tab.url, extensionOrigin));
     const nativeSuspended = Boolean(tab.discarded && (record?.mode === "native-discard" || !record));
-    const blockReason = record ? "" : suspensionBlockReason(tab, settings, extensionOrigin);
+    const blockReason = record
+      ? ""
+      : settings.suspensionMode === SUSPENSION_MODES.SMART
+        ? smartSuspensionBlockReason(tab, settings, extensionOrigin, protectionStates[tab.id])
+        : suspensionBlockReason(tab, settings, extensionOrigin);
     return {
       id: tab.id,
       title: record?.title || tab.title || "Untitled tab",
@@ -302,11 +368,19 @@ chrome.runtime.onInstalled.addListener(async () => {
   await ensureAlarm();
   await ensureCheckpointAlarm();
   await recordExistingTabs();
+  if ((await getSettings()).suspensionMode === SUSPENSION_MODES.SMART) {
+    await registerProtectionScript();
+    await initializeExistingProtection();
+  }
 });
 chrome.runtime.onStartup.addListener(async () => {
   await ensureAlarm();
   await ensureCheckpointAlarm();
   await rebindSuspendedTabs();
+  if ((await getSettings()).suspensionMode === SUSPENSION_MODES.SMART) {
+    await registerProtectionScript();
+    await initializeExistingProtection();
+  }
 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM_NAME) processIdleTabs().catch(console.error);
@@ -314,9 +388,10 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 chrome.tabs.onActivated.addListener(({ tabId }) => touchTab(tabId));
 chrome.tabs.onRemoved.addListener(async (tabId) => {
-  await Promise.all([removeActivity(tabId), removeRecordsForTab(tabId)]);
+  await Promise.all([removeActivity(tabId), removeRecordsForTab(tabId), removeProtectionState(tabId)]);
 });
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.url) removeProtectionState(tabId).catch(console.error);
   if (changeInfo.status !== "complete") return;
   (async () => {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
@@ -346,6 +421,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       await saveSettings(next);
       return next;
     },
+    setSuspensionMode: () => setSuspensionMode(message.mode),
     pauseAutomation: () => pauseAutomation(message.minutes),
     trustDomain: () => trustDomain(message.url),
     focusTab: () => focusTab(message.tabId),
@@ -408,6 +484,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
   };
 
+  if (message.type === "pageProtection") {
+    if (!sender.tab || !message.state || sender.tab.url !== message.state.url) return false;
+    setProtectionState(sender.tab.id, {
+      ready: Boolean(message.state.ready),
+      dirty: Boolean(message.state.dirty),
+      upload: Boolean(message.state.upload),
+      media: Boolean(message.state.media)
+    }).then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false }));
+    return true;
+  }
   const task = tasks[message.type];
   if (!task) return false;
   task().then(sendResponse).catch((error) => sendResponse({ ok: false, reason: error.message }));
