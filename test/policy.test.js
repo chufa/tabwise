@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { escapeHtml } from "../src/shared/html.js";
-import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isSuspendableUrl, isSuspendedUrl, matchesDomain, planLocalOrganization, suspensionBlockReason } from "../src/shared/policy.js";
+import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isSuspendableUrl, isSuspendedUrl, matchesDomain, planLocalOrganization, smartSuspensionBlockReason, suspensionBlockReason } from "../src/shared/policy.js";
 
 const settings = { trustedDomains: ["example.com"], blockedDomains: ["mail.example.com"] };
 const origin = "chrome-extension://extension-id";
@@ -28,6 +28,16 @@ test("allows explicit suspension to override trust and pinned status only", () =
   assert.equal(directSuspensionBlockReason({ id: 1, audible: true, url: "https://untrusted.example" }, origin), "");
   assert.equal(directSuspensionBlockReason({ id: 1, active: true, url: "https://untrusted.example" }, origin), "Active tab");
   assert.equal(directSuspensionBlockReason({ id: 1, status: "loading", url: "https://untrusted.example" }, origin), "Still loading");
+});
+
+test("requires a clean, ready page before smart protection can suspend it", () => {
+  const tab = { id: 1, url: "https://untrusted.example/article", status: "complete" };
+  assert.equal(smartSuspensionBlockReason(tab, settings, origin), "Protection status unknown");
+  assert.equal(smartSuspensionBlockReason(tab, settings, origin, { ready: true }), "");
+  assert.equal(smartSuspensionBlockReason(tab, settings, origin, { ready: true, dirty: true }), "Unsaved edits");
+  assert.equal(smartSuspensionBlockReason(tab, settings, origin, { ready: true, upload: true }), "Upload in progress");
+  assert.equal(smartSuspensionBlockReason(tab, settings, origin, { ready: true, media: true }), "Media activity");
+  assert.equal(smartSuspensionBlockReason({ ...tab, audible: true }, settings, origin, { ready: true }), "Playing audio");
 });
 
 test("groups local domains and finds exact URL duplicates", () => {

@@ -7,9 +7,15 @@ export const SCHEMA_VERSION = 1;
 export const DEFAULT_SETTINGS = Object.freeze({
   idleMinutes: 30,
   autoSuspend: false,
+  suspensionMode: "conservative",
   trustedDomains: [],
   blockedDomains: [],
   pauseUntil: 0
+});
+
+export const SUSPENSION_MODES = Object.freeze({
+  CONSERVATIVE: "conservative",
+  SMART: "smart"
 });
 
 export const SUSPENSION_STATES = Object.freeze({

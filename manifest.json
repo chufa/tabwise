@@ -7,7 +7,12 @@
     "tabs",
     "storage",
     "alarms",
-    "tabGroups"
+    "tabGroups",
+    "scripting"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
   ],
   "background": {
     "service_worker": "src/background/service-worker.js",

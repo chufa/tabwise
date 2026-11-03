@@ -8,17 +8,32 @@ async function load() {
   const settings = await chrome.runtime.sendMessage({ type: "getDashboard" }).then((data) => data.settings);
   $("#idle-minutes").value = settings.idleMinutes;
   $("#auto-suspend").checked = settings.autoSuspend;
+  $(`input[name="suspension-mode"][value="${settings.suspensionMode || "conservative"}"]`).checked = true;
   $("#trusted-domains").value = settings.trustedDomains.join("\n");
   $("#blocked-domains").value = settings.blockedDomains.join("\n");
 }
 
 $("#settings-form").addEventListener("submit", async (event) => {
   event.preventDefault();
+  const mode = document.querySelector('input[name="suspension-mode"]:checked').value;
+  if (mode === "smart") {
+    const granted = await chrome.permissions.request({ origins: ["http://*/*", "https://*/*"] });
+    if (!granted) {
+      $("#saved").textContent = "未授予网页保护权限，未启用智能保护模式";
+      return;
+    }
+  }
+  const modeResult = await chrome.runtime.sendMessage({ type: "setSuspensionMode", mode });
+  if (!modeResult.ok) {
+    $("#saved").textContent = modeResult.reason;
+    return;
+  }
   await chrome.runtime.sendMessage({
     type: "updateSettings",
     settings: {
       idleMinutes: Number($("#idle-minutes").value),
       autoSuspend: $("#auto-suspend").checked,
+      suspensionMode: mode,
       trustedDomains: lines($("#trusted-domains").value),
       blockedDomains: lines($("#blocked-domains").value)
     }
