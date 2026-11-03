@@ -12,6 +12,30 @@ function formatRelativeTime(timestamp) {
   return `${hours} 小时前活跃`;
 }
 
+function formatDuration(startedAt) {
+  if (!startedAt) return "刚开始观察";
+  const minutes = Math.max(0, Math.floor((Date.now() - startedAt) / 60_000));
+  if (minutes < 1) return "不足 1 分钟";
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes ? `${hours} 小时 ${remainingMinutes} 分钟` : `${hours} 小时`;
+}
+
+function protectionReason(reason) {
+  const labels = {
+    "Active tab": "当前正在使用",
+    "Pinned tab": "已固定",
+    "Playing audio": "正在播放音频",
+    "Still loading": "页面仍在加载",
+    "Already discarded by browser": "已由浏览器卸载",
+    "Not a web page": "浏览器内部页面",
+    "Never suspend domain": "在永不休眠列表中",
+    "Untrusted domain": "未信任的网站"
+  };
+  return labels[reason] || reason;
+}
+
 function row({ title, subtitle, action = "", secondaryAction = "", id = "", badge = "", tabIds = [] }) {
   const tabData = tabIds.length ? ` data-tab-ids="${escapeHtml(JSON.stringify(tabIds))}"` : "";
   const actionId = action?.id || id;
@@ -89,19 +113,22 @@ function renderTabs() {
   $("#tabs").className = tabs.length ? "list" : "list empty-state";
   $("#tabs").innerHTML = tabs.map((tab) => {
     const isProtected = !tab.suspended && tab.status === "protected";
-    const canTrust = isProtected && /^https?:/.test(tab.url) && !["Active tab", "Pinned tab", "Playing audio", "Still loading", "Never suspend domain"].includes(tab.reason);
+    const canTrust = isProtected && /^https?:/.test(tab.url) && tab.reason === "Untrusted domain";
+    const canDirectSuspend = isProtected && /^https?:/.test(tab.url) && !["Active tab", "Still loading", "Already discarded by browser"].includes(tab.reason);
     const action = tab.suspended
       ? { type: "restore", label: "恢复" }
       : tab.status === "live" ? { type: "suspend", label: "休眠" }
-        : canTrust ? { type: "trust", label: "信任网站" } : null;
+        : canDirectSuspend ? { type: "direct-suspend", label: "直接休眠" } : null;
+    const secondaryAction = canTrust ? { type: "trust", label: "信任网站" } : null;
     const subtitle = tab.suspended
-      ? `休眠于 ${new Date(tab.suspendedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
-      : isProtected ? tab.reason : `${tab.domain} · ${formatRelativeTime(tab.lastActivity)}`;
+      ? `已休眠 ${formatDuration(tab.suspendedAt)} · 已观察 ${formatDuration(tab.observedAt)}`
+      : isProtected ? `${protectionReason(tab.reason)} · 已观察 ${formatDuration(tab.observedAt)}` : `${tab.domain} · ${formatRelativeTime(tab.lastActivity)} · 已观察 ${formatDuration(tab.observedAt)}`;
     return row({
       title: tab.title,
       subtitle,
       action,
-      id: tab.suspended ? tab.recordId : tab.id,
+      secondaryAction,
+      id: tab.suspended ? (tab.recordId || tab.id) : tab.id,
       badge: tab.suspended ? "休眠中" : isProtected ? "已保护" : ""
     });
   }).join("") || "没有符合当前筛选条件的标签页。";
@@ -114,6 +141,9 @@ async function render() {
   $("#eligible-count").textContent = summary.eligible;
   $("#suspended-count").textContent = tabs.filter((tab) => tab.suspended).length;
   $("#duplicate-count").textContent = organization.duplicates.reduce((total, group) => total + group.tabIds.length - 1, 0);
+  $("#resource-note").textContent = summary.unloaded
+    ? `已卸载 ${summary.unloaded} 个页面的渲染内容；切回休眠标签时 Chrome 会自动重新加载。`
+    : "暂无已卸载页面；休眠不会改写标签页 URL 或浏览历史。";
   renderAutomationState(state.data.settings);
   renderSuggestions(organization);
   renderTabs();
@@ -139,7 +169,12 @@ document.body.addEventListener("click", async (event) => {
   const { action, id } = button.dataset;
   let result;
   if (action === "suspend") result = await send({ type: "suspendTab", tabId: Number(id) });
-  if (action === "restore") result = await send({ type: "restoreRecord", recordId: id });
+  if (action === "direct-suspend") result = await send({ type: "directSuspendTab", tabId: Number(id) });
+  if (action === "restore") {
+    result = Number.isInteger(Number(id)) && String(Number(id)) === id
+      ? await send({ type: "restoreTab", tabId: Number(id) })
+      : await send({ type: "restoreRecord", recordId: id });
+  }
   if (action === "trust") result = await send({ type: "trustDomain", url: state.data.tabs.find((tab) => tab.id === Number(id))?.url });
   if (action === "focus-tab") result = await send({ type: "focusTab", tabId: Number(id) });
   if (action === "open-workspace") {

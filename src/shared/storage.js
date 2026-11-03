@@ -3,7 +3,9 @@ import { DEFAULT_SETTINGS, SCHEMA_VERSION } from "./constants.js";
 const keys = Object.freeze({
   settings: "settings",
   records: "suspensionRecords",
+  restoreRecords: "suspensionRestoreRecords",
   activity: "lastActivity",
+  observedAt: "firstObservedAt",
   workspaces: "workspaces"
 });
 
@@ -22,31 +24,43 @@ export async function getRecords() {
 }
 
 export async function putRecord(record) {
-  const records = await getRecords();
-  records[record.recordId] = { schemaVersion: SCHEMA_VERSION, ...record };
-  await chrome.storage.local.set({ [keys.records]: records });
+  const { [keys.records]: records = {}, [keys.restoreRecords]: restoreRecords = {} } = await chrome.storage.local.get([keys.records, keys.restoreRecords]);
+  const nextRecord = { schemaVersion: SCHEMA_VERSION, ...record };
+  records[record.recordId] = nextRecord;
+  restoreRecords[record.recordId] = nextRecord;
+  await chrome.storage.local.set({ [keys.records]: records, [keys.restoreRecords]: restoreRecords });
 }
 
 export async function getRecord(recordId) {
-  return (await getRecords())[recordId];
+  const { [keys.records]: records = {}, [keys.restoreRecords]: restoreRecords = {} } = await chrome.storage.local.get([keys.records, keys.restoreRecords]);
+  return records[recordId] || restoreRecords[recordId];
 }
 
 export async function removeRecord(recordId) {
+  const { [keys.records]: records = {}, [keys.restoreRecords]: restoreRecords = {} } = await chrome.storage.local.get([keys.records, keys.restoreRecords]);
+  delete records[recordId];
+  delete restoreRecords[recordId];
+  await chrome.storage.local.set({ [keys.records]: records, [keys.restoreRecords]: restoreRecords });
+}
+
+export async function removePrimaryRecord(recordId) {
   const records = await getRecords();
   delete records[recordId];
   await chrome.storage.local.set({ [keys.records]: records });
 }
 
 export async function removeRecordsForTab(tabId) {
-  const records = await getRecords();
+  const { [keys.records]: records = {}, [keys.restoreRecords]: restoreRecords = {} } = await chrome.storage.local.get([keys.records, keys.restoreRecords]);
   let changed = false;
-  for (const [recordId, record] of Object.entries(records)) {
+  const allRecords = { ...restoreRecords, ...records };
+  for (const [recordId, record] of Object.entries(allRecords)) {
     if (record.tabId === tabId) {
       delete records[recordId];
+      delete restoreRecords[recordId];
       changed = true;
     }
   }
-  if (changed) await chrome.storage.local.set({ [keys.records]: records });
+  if (changed) await chrome.storage.local.set({ [keys.records]: records, [keys.restoreRecords]: restoreRecords });
 }
 
 export async function getActivity() {
@@ -55,15 +69,22 @@ export async function getActivity() {
 }
 
 export async function touchTab(tabId, at = Date.now()) {
-  const activity = await getActivity();
+  const { [keys.activity]: activity = {}, [keys.observedAt]: observedAt = {} } = await chrome.storage.session.get([keys.activity, keys.observedAt]);
   activity[tabId] = at;
-  await chrome.storage.session.set({ [keys.activity]: activity });
+  observedAt[tabId] ||= at;
+  await chrome.storage.session.set({ [keys.activity]: activity, [keys.observedAt]: observedAt });
+}
+
+export async function getObservedAt() {
+  const { [keys.observedAt]: observedAt = {} } = await chrome.storage.session.get(keys.observedAt);
+  return observedAt;
 }
 
 export async function removeActivity(tabId) {
-  const activity = await getActivity();
+  const { [keys.activity]: activity = {}, [keys.observedAt]: observedAt = {} } = await chrome.storage.session.get([keys.activity, keys.observedAt]);
   delete activity[tabId];
-  await chrome.storage.session.set({ [keys.activity]: activity });
+  delete observedAt[tabId];
+  await chrome.storage.session.set({ [keys.activity]: activity, [keys.observedAt]: observedAt });
 }
 
 export async function getWorkspaces() {

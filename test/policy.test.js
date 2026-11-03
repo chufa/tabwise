@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { escapeHtml } from "../src/shared/html.js";
-import { domainForUrl, isSuspendableUrl, isSuspendedUrl, matchesDomain, planLocalOrganization, suspensionBlockReason } from "../src/shared/policy.js";
+import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isSuspendableUrl, isSuspendedUrl, matchesDomain, planLocalOrganization, suspensionBlockReason } from "../src/shared/policy.js";
 
 const settings = { trustedDomains: ["example.com"], blockedDomains: ["mail.example.com"] };
 const origin = "chrome-extension://extension-id";
@@ -19,6 +19,15 @@ test("rejects unsafe or untrusted tabs", () => {
   assert.equal(isSuspendableUrl("https://example.com"), true);
   assert.equal(isSuspendableUrl("chrome://settings"), false);
   assert.equal(isSuspendedUrl("chrome-extension://extension-id/src/suspended/suspended.html#record", origin), true);
+  assert.equal(isExpectedSuspensionUrl("chrome-extension://extension-id/src/suspended/suspended.html#record", origin, "record"), true);
+  assert.equal(isExpectedSuspensionUrl("chrome-extension://extension-id/src/suspended/suspended.html#other", origin, "record"), false);
+});
+
+test("allows explicit suspension to override trust and pinned status only", () => {
+  assert.equal(directSuspensionBlockReason({ id: 1, pinned: true, url: "https://untrusted.example" }, origin), "");
+  assert.equal(directSuspensionBlockReason({ id: 1, audible: true, url: "https://untrusted.example" }, origin), "");
+  assert.equal(directSuspensionBlockReason({ id: 1, active: true, url: "https://untrusted.example" }, origin), "Active tab");
+  assert.equal(directSuspensionBlockReason({ id: 1, status: "loading", url: "https://untrusted.example" }, origin), "Still loading");
 });
 
 test("groups local domains and finds exact URL duplicates", () => {

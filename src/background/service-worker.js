@@ -1,6 +1,6 @@
 import { ALARM_NAME, ALARM_PERIOD_MINUTES, SUSPENDED_PAGE, SUSPENSION_STATES } from "../shared/constants.js";
-import { domainForUrl, isSuspendableUrl, isSuspendedUrl, normalizeDomain, planLocalOrganization, suspensionBlockReason } from "../shared/policy.js";
-import { addWorkspace, getActivity, getRecord, getRecords, getSettings, getWorkspaces, putRecord, removeActivity, removeRecord, removeRecordsForTab, saveSettings, touchTab, updateWorkspace } from "../shared/storage.js";
+import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isSuspendableUrl, isSuspendedUrl, normalizeDomain, planLocalOrganization, suspensionBlockReason } from "../shared/policy.js";
+import { addWorkspace, getActivity, getObservedAt, getRecord, getRecords, getSettings, getWorkspaces, putRecord, removeActivity, removePrimaryRecord, removeRecord, removeRecordsForTab, saveSettings, touchTab, updateWorkspace } from "../shared/storage.js";
 
 const extensionOrigin = chrome.runtime.getURL("").replace(/\/$/, "");
 const tabQueues = new Map();
@@ -60,10 +60,12 @@ async function isIdleEnough(tabId, thresholdMs) {
   return Boolean(lastActive && Date.now() - lastActive >= thresholdMs);
 }
 
-async function suspendTab(tabId, reason = "manual") {
+async function suspendTab(tabId, reason = "manual", allowProtected = false) {
   return runForTab(tabId, async () => {
     const [settings, tab] = await Promise.all([getSettings(), chrome.tabs.get(tabId)]);
-    const blockReason = suspensionBlockReason(tab, settings, extensionOrigin);
+    const blockReason = allowProtected
+      ? directSuspensionBlockReason(tab, extensionOrigin)
+      : suspensionBlockReason(tab, settings, extensionOrigin);
     if (blockReason) return { ok: false, reason: blockReason };
 
     const recordId = crypto.randomUUID();
@@ -85,13 +87,12 @@ async function suspendTab(tabId, reason = "manual") {
       return { ok: false, reason: "Tab changed before suspension" };
     }
 
-    const expectedUrl = `${chrome.runtime.getURL(SUSPENDED_PAGE)}#${recordId}`;
-    const updatedTab = await chrome.tabs.update(tabId, { url: expectedUrl });
-    if (updatedTab.url !== expectedUrl) {
+    const discardedTab = await chrome.tabs.discard(tabId);
+    if (!discardedTab?.discarded) {
       await removeRecord(recordId);
-      return { ok: false, reason: "Browser did not open the suspension page" };
+      return { ok: false, reason: "浏览器未能卸载该标签页" };
     }
-    await putRecord({ ...record, state: SUSPENSION_STATES.SUSPENDED });
+    await putRecord({ ...record, mode: "native-discard", state: SUSPENSION_STATES.SUSPENDED });
     return { ok: true, recordId };
   });
 }
@@ -103,6 +104,18 @@ async function restoreRecord(recordId, senderTabId) {
 
   return runForTab(tabId, async () => {
     const current = await chrome.tabs.get(tabId);
+    if (record.mode === "native-discard") {
+      if (current.url !== record.originalUrl) return { ok: false, reason: "标签页已导航到其他地址" };
+      if (!current.discarded) {
+        await removeRecord(recordId);
+        return { ok: true };
+      }
+      await chrome.tabs.reload(tabId);
+      await removeRecord(recordId);
+      await touchTab(tabId);
+      return { ok: true };
+    }
+
     const expected = `${chrome.runtime.getURL(SUSPENDED_PAGE)}#${recordId}`;
     if (current.url !== expected) return { ok: false, reason: "This tab no longer matches the suspended page" };
     if (!isSuspendableUrl(record.originalUrl)) return { ok: false, reason: "The original URL is no longer supported" };
@@ -128,10 +141,12 @@ async function processIdleTabs() {
 }
 
 async function getDashboard() {
-  const [settings, records, tabs, activity] = await Promise.all([getSettings(), getRecords(), chrome.tabs.query({}), getActivity()]);
+  const [settings, records, tabs, activity, observedAt] = await Promise.all([getSettings(), getRecords(), chrome.tabs.query({}), getActivity(), getObservedAt()]);
   const recordsByTab = new Map(Object.values(records).map((record) => [record.tabId, record]));
   const rows = tabs.map((tab) => {
     const record = recordsByTab.get(tab.id);
+    const legacySuspended = Boolean(record && isSuspendedUrl(tab.url, extensionOrigin));
+    const nativeSuspended = Boolean(tab.discarded && (record?.mode === "native-discard" || !record));
     const blockReason = record ? "" : suspensionBlockReason(tab, settings, extensionOrigin);
     return {
       id: tab.id,
@@ -139,12 +154,13 @@ async function getDashboard() {
       url: record?.originalUrl || tab.url || "",
       domain: domainForUrl(record?.originalUrl || tab.url || ""),
       active: Boolean(tab.active),
-      suspended: Boolean(record && isSuspendedUrl(tab.url, extensionOrigin)),
-      status: record?.state || (blockReason ? "protected" : "live"),
+      suspended: legacySuspended || nativeSuspended,
+      status: legacySuspended || nativeSuspended ? SUSPENSION_STATES.SUSPENDED : (record?.state || (blockReason ? "protected" : "live")),
       reason: record?.reason || blockReason,
       recordId: record?.recordId || "",
       suspendedAt: record?.suspendedAt || 0,
-      lastActivity: activity[tab.id] || 0
+      lastActivity: activity[tab.id] || 0,
+      observedAt: observedAt[tab.id] || 0
     };
   });
   const liveTabs = tabs.filter((tab) => !isSuspendedUrl(tab.url, extensionOrigin));
@@ -154,7 +170,8 @@ async function getDashboard() {
     organization: planLocalOrganization(liveTabs),
     summary: {
       eligible: rows.filter((row) => row.status === "live").length,
-      protected: rows.filter((row) => row.status === "protected").length
+      protected: rows.filter((row) => row.status === "protected").length,
+      unloaded: rows.filter((row) => row.suspended).length
     }
   };
 }
@@ -194,6 +211,16 @@ async function focusTab(tabId) {
     const tab = await chrome.tabs.get(tabId);
     await chrome.windows.update(tab.windowId, { focused: true });
     await chrome.tabs.update(tab.id, { active: true });
+    return { ok: true };
+  } catch {
+    return { ok: false, reason: "标签页已关闭或不可用" };
+  }
+}
+
+async function restoreTab(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.discarded) await chrome.tabs.reload(tabId);
     return { ok: true };
   } catch {
     return { ok: false, reason: "标签页已关闭或不可用" };
@@ -242,8 +269,17 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   await Promise.all([removeActivity(tabId), removeRecordsForTab(tabId)]);
 });
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (!changeInfo.url || isSuspendedUrl(changeInfo.url, extensionOrigin)) return;
-  Promise.all([touchTab(tabId), removeRecordsForTab(tabId)]).catch(console.error);
+  if (changeInfo.status !== "complete") return;
+  (async () => {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab) return;
+    const records = await getRecords();
+    const record = Object.values(records).find((item) => item.tabId === tabId);
+    if (record && isExpectedSuspensionUrl(tab.url, extensionOrigin, record.recordId)) return;
+    if (isSuspendedUrl(tab.url, extensionOrigin)) return;
+    if (record) await removePrimaryRecord(record.recordId);
+    await touchTab(tabId);
+  })().catch(console.error);
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -251,6 +287,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     getDashboard,
     getSuspendedRecord: () => getSuspendedRecordForSender(message.recordId, sender),
     suspendTab: () => suspendTab(message.tabId),
+    directSuspendTab: () => suspendTab(message.tabId, "direct", true),
     restoreRecord: () => restoreRecord(message.recordId, sender.tab?.id),
     updateSettings: async () => {
       const current = await getSettings();
@@ -261,6 +298,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     pauseAutomation: () => pauseAutomation(message.minutes),
     trustDomain: () => trustDomain(message.url),
     focusTab: () => focusTab(message.tabId),
+    restoreTab: () => restoreTab(message.tabId),
     suspendEligibleTabs: suspendEligibleTabsInCurrentWindow,
     saveWorkspace: async () => {
       const tabs = await chrome.tabs.query({ currentWindow: true });

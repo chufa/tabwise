@@ -33,6 +33,10 @@ export function isSuspendedUrl(url, extensionOrigin) {
   return Boolean(url && extensionOrigin && url.startsWith(`${extensionOrigin}/${SUSPENDED_PAGE}`));
 }
 
+export function isExpectedSuspensionUrl(url, extensionOrigin, recordId) {
+  return url === `${extensionOrigin}/${SUSPENDED_PAGE}#${recordId}`;
+}
+
 export function suspensionBlockReason(tab, settings, extensionOrigin) {
   if (!tab?.id) return "Tab is unavailable";
   if (tab.active) return "Active tab";
@@ -46,6 +50,16 @@ export function suspensionBlockReason(tab, settings, extensionOrigin) {
   const domain = domainForUrl(tab.url);
   if (matchesDomain(domain, settings.blockedDomains || [])) return "Never suspend domain";
   if (!matchesDomain(domain, settings.trustedDomains || [])) return "Untrusted domain";
+  return "";
+}
+
+export function directSuspensionBlockReason(tab, extensionOrigin) {
+  if (!tab?.id) return "Tab is unavailable";
+  if (tab.active) return "Active tab";
+  if (tab.status === "loading") return "Still loading";
+  if (tab.discarded) return "Already discarded by browser";
+  if (!isSuspendableUrl(tab.url)) return "Not a web page";
+  if (isSuspendedUrl(tab.url, extensionOrigin)) return "Already suspended";
   return "";
 }
 

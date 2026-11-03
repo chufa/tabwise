@@ -37,6 +37,7 @@ button:disabled { opacity: .52; cursor: default; }
 .summary div { min-width: 68px; display: grid; gap: 3px; text-align: center; }
 .summary strong { font-variant-numeric: tabular-nums; font-size: 17px; line-height: 1; }
 .summary span, .count-label { color: #627669; font-size: 11px; }
+.resource-note { margin: -16px 0 2px; color: #607468; font-size: 11px; line-height: 1.5; }
 
 .section { margin-top: 24px; }
 .section-heading { margin-bottom: 10px; }
@@ -57,6 +58,7 @@ button:disabled { opacity: .52; cursor: default; }
 .filter { flex: 0 0 auto; border: 1px solid transparent; border-radius: 5px; padding: 5px 7px; background: transparent; color: #607468; font-size: 11px; }
 .filter:hover { background: #edf4ef; }
 .filter.is-active { border-color: #bcd5c4; background: #e7f4eb; color: #175b40; font-weight: 700; }
+.protection-hint { margin: 0 0 10px; color: #607468; font-size: 12px; line-height: 1.5; }
 .workspace-form { gap: 7px; margin-bottom: 9px; }
 .workspace-form input { padding: 8px 9px; font-size: 12px; }
 .workspace-form .secondary-button { padding: 8px 10px; }
@@ -75,12 +77,14 @@ button:disabled { opacity: .52; cursor: default; }
   :root { color-scheme: dark; color: #eaf2eb; background: #15211a; }
   body { background: #15211a; }
   .topbar p, .subtle, .summary span, .count-label, .row-main span, .empty-state { color: #a9bdae; }
+  .resource-note { color: #a9bdae; }
   .summary { border-color: #33483a; }
   .row, .secondary-button, .action-button, .search-field input, .workspace-form input, .workspace-search-field input { border-color: #405645; background: #1d2c23; color: #eaf2eb; }
   .search-field input::placeholder, .workspace-form input::placeholder, .workspace-search-field input::placeholder { color: #aebfb3; }
   .secondary-button, .action-button, .quiet-button { color: #9dd9b1; }
   .action-button:hover, .secondary-button:hover, .filter:hover { background: #284332; }
   .filter { color: #b2c8b6; }
+  .protection-hint { color: #a9bdae; }
   .filter.is-active { border-color: #4b7457; background: #284a35; color: #c8f0d2; }
   .status-badge { background: #493c1c; color: #f3d67b; }
   .status-badge.resting { background: #254533; color: #aee7be; }
