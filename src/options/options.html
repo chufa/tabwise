@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TabWise 设置</title>
+    <link rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>休眠设置</h1>
+        <p>TabWise 只会自动休眠你明确允许的网站，其他页面默认保持受保护状态。</p>
+      </header>
+      <form id="settings-form">
+        <section class="setting-group">
+          <h2>自动休眠</h2>
+          <label class="switch-row" for="auto-suspend">
+            <span><strong>启用自动休眠</strong><small>仅作用于可信网站，活动、固定、播放音频或加载中的页面不会被休眠。</small></span>
+            <input id="auto-suspend" type="checkbox">
+          </label>
+          <label class="field-label" for="idle-minutes">
+            <span>闲置时长</span>
+            <div class="number-field"><input id="idle-minutes" type="number" min="5" max="1440" required><span>分钟</span></div>
+          </label>
+        </section>
+        <section class="setting-group">
+          <h2>可信网站</h2>
+          <p class="section-copy">每行一个域名。只有这些网站的标签页才会进入自动休眠；子域名会一并匹配。</p>
+          <label class="visually-hidden" for="trusted-domains">可信网站域名</label>
+          <textarea id="trusted-domains" rows="6" spellcheck="false" placeholder="docs.example.com&#10;news.example.com"></textarea>
+        </section>
+        <section class="setting-group">
+          <h2>永不休眠</h2>
+          <p class="section-copy">将邮箱、会议、文档协作等页面放在这里。此列表优先于可信网站。</p>
+          <label class="visually-hidden" for="blocked-domains">永不休眠域名</label>
+          <textarea id="blocked-domains" rows="5" spellcheck="false" placeholder="mail.example.com&#10;meet.example.com"></textarea>
+        </section>
+        <div class="actions"><button type="submit">保存设置</button><span id="saved" role="status"></span></div>
+      </form>
+      <section class="privacy-note">
+        <h2>本地优先</h2>
+        <p>设置、工作区快照和休眠记录仅保存在浏览器本地。TabWise 不上传页面正文、Cookie、表单内容或完整网址，也不会在未明确开启前调用外部大模型。</p>
+      </section>
+      <section class="backup-note">
+        <h2>本地备份</h2>
+        <p>导出仅包含设置和保存的工作区，不包含当前打开的标签、Cookie、表单数据或休眠中的临时记录。导入会合并有效工作区，并恢复经过校验的休眠设置。</p>
+        <div class="backup-actions">
+          <button id="export-backup" type="button">导出工作区备份</button>
+          <label class="import-button" for="import-backup">导入备份<input id="import-backup" type="file" accept="application/json,.json"></label>
+          <span id="backup-feedback" role="status"></span>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

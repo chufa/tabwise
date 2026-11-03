@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TabWise</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>TabWise</h1>
+        <p id="automation-state">正在读取自动休眠状态</p>
+      </div>
+      <button id="settings" class="quiet-button" type="button">设置</button>
+    </header>
+
+    <section class="command-strip" aria-label="休眠控制">
+      <button id="suspend-eligible" class="primary-button" type="button">休眠本窗口可用标签</button>
+      <button id="pause-automation" class="secondary-button" type="button">暂停 1 小时</button>
+    </section>
+    <p id="action-feedback" class="feedback" role="status"></p>
+
+    <section class="summary" aria-label="标签概览">
+      <div><strong id="open-count">0</strong><span>全部标签</span></div>
+      <div><strong id="eligible-count">0</strong><span>可休眠</span></div>
+      <div><strong id="suspended-count">0</strong><span>休眠中</span></div>
+      <div><strong id="duplicate-count">0</strong><span>重复页</span></div>
+    </section>
+
+    <section class="section">
+      <div class="section-heading">
+        <h2>智能整理</h2>
+        <span id="suggestion-count" class="count-label"></span>
+      </div>
+      <div id="suggestions" class="list empty-state">正在分析标签页...</div>
+    </section>
+
+    <section class="section tabs-section">
+      <div class="section-heading">
+        <h2>标签页</h2>
+        <button id="refresh" class="quiet-button" type="button">刷新</button>
+      </div>
+      <label class="search-field">
+        <span class="visually-hidden">搜索标签页</span>
+        <input id="tab-search" type="search" placeholder="搜索标题或网站">
+      </label>
+      <div class="filter-bar" role="group" aria-label="标签状态筛选">
+        <button class="filter is-active" data-filter="all" type="button">全部</button>
+        <button class="filter" data-filter="live" type="button">可休眠</button>
+        <button class="filter" data-filter="suspended" type="button">休眠中</button>
+        <button class="filter" data-filter="protected" type="button">已保护</button>
+      </div>
+      <div id="tabs" class="list"></div>
+    </section>
+
+    <section class="section workspace-section">
+      <div class="section-heading">
+        <h2>工作区</h2>
+        <button id="toggle-workspace-form" class="quiet-button" type="button">保存当前窗口</button>
+      </div>
+      <form id="workspace-form" class="workspace-form" hidden>
+        <label class="visually-hidden" for="workspace-name">工作区名称</label>
+        <input id="workspace-name" maxlength="80" required placeholder="例如：本周调研">
+        <button class="secondary-button" type="submit">保存</button>
+      </form>
+      <label class="workspace-search-field">
+        <span class="visually-hidden">搜索保存的工作区</span>
+        <input id="workspace-search" type="search" placeholder="搜索保存的工作区">
+      </label>
+      <div id="workspaces" class="list"></div>
+    </section>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

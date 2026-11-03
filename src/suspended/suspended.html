@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>标签页已休眠 | TabWise</title>
+    <link rel="stylesheet" href="suspended.css">
+  </head>
+  <body>
+    <main class="shell">
+      <div class="mark" aria-hidden="true">T</div>
+      <h1 id="title">此标签页正在休眠</h1>
+      <p id="detail">原始页面已卸载，恢复前不会占用其渲染资源。</p>
+      <button id="restore" type="button">恢复页面</button>
+      <p id="hint">也可以刷新当前标签页来恢复。</p>
+      <p id="error" role="alert"></p>
+    </main>
+    <script type="module" src="suspended.js"></script>
+  </body>
+</html>

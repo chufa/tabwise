@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">TabWise tab stack</title>
+  <rect width="512" height="512" rx="120" fill="#103c2d"/>
+  <path d="M106 144c0-25 20-45 45-45h210c25 0 45 20 45 45v163c0 25-20 45-45 45H151c-25 0-45-20-45-45V144Z" fill="#207958"/>
+  <path d="M141 181c0-21 17-38 38-38h201c21 0 38 17 38 38v161c0 21-17 38-38 38H179c-21 0-38-17-38-38V181Z" fill="#5dd3a2"/>
+  <path d="M95 224c0-27 22-49 49-49h218c27 0 49 22 49 49v122c0 27-22 49-49 49H144c-27 0-49-22-49-49V224Z" fill="#0d5139"/>
+  <path d="M126 241c0-21 17-38 38-38h220c21 0 38 17 38 38v104c0 21-17 38-38 38H164c-21 0-38-17-38-38V241Z" fill="#effcf4"/>
+  <path d="M126 276h296v69c0 21-17 38-38 38H164c-21 0-38-17-38-38v-69Z" fill="#c9f3dc"/>
+  <circle cx="164" cy="240" r="15" fill="#f7c84a"/>
+  <path d="M224 306h137" stroke="#1d7956" stroke-linecap="round" stroke-width="26"/>
+  <path d="m333 116 14 28 31 5-22 22 5 31-28-15-28 15 5-31-22-22 31-5 14-28Z" fill="#f7c84a"/>
+</svg>

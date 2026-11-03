@@ -1,0 +1,10 @@
+{
+  "name": "tabwise",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "check": "node --check src/background/service-worker.js && node --check src/shared/policy.js && node --check src/shared/storage.js && node --check src/shared/html.js && node --check src/popup/popup.js && node --check src/options/options.js && node --check src/suspended/suspended.js"
+  }
+}
