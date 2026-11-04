@@ -8,14 +8,22 @@
   </head>
   <body>
     <header class="topbar">
-      <div>
-        <h1>TabWise</h1>
-        <p id="state">正在读取页面记忆</p>
+      <div class="brand-lockup">
+        <span class="brand-mark" aria-hidden="true">TW</span>
+        <div>
+          <h1>TabWise</h1>
+          <p id="state">正在读取页面记忆</p>
+        </div>
       </div>
       <button id="settings" class="quiet-button" type="button">设置</button>
     </header>
 
     <main>
+      <dl class="overview" aria-label="当前标签概览">
+        <div><dt>可休眠</dt><dd id="overview-eligible">-</dd></div>
+        <div><dt>休眠中</dt><dd id="overview-suspended">-</dd></div>
+        <div><dt>JS 堆</dt><dd id="overview-heap">-</dd></div>
+      </dl>
       <label class="search-field" for="page-search">
         <span>查找页面</span>
         <input id="page-search" type="search" autocomplete="off" placeholder="例如：上周 React 性能文章">

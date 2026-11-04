@@ -8,9 +8,12 @@
   </head>
   <body>
     <header class="topbar">
-      <div>
-        <h1>TabWise</h1>
-        <p id="automation-state">正在读取自动休眠状态</p>
+      <div class="brand-lockup">
+        <span class="brand-mark" aria-hidden="true">TW</span>
+        <div>
+          <h1>TabWise</h1>
+          <p id="automation-state">正在读取自动休眠状态</p>
+        </div>
       </div>
       <div class="topbar-actions">
         <button id="open-search" class="quiet-button" type="button">搜索</button>
@@ -62,18 +65,20 @@
         <h2>标签页</h2>
         <button id="refresh" class="quiet-button" type="button">刷新</button>
       </div>
-      <label class="search-field">
-        <span class="visually-hidden">搜索标签页</span>
-        <input id="tab-search" type="search" placeholder="搜索标题或网站">
-      </label>
-      <label class="sort-field">
-        <span>排序</span>
-        <select id="tab-sort" aria-label="标签页排序">
-          <option value="recent">最近活跃</option>
-          <option value="duration">运行时间最长</option>
-          <option value="memory">JS 堆内存最大</option>
-        </select>
-      </label>
+      <div class="tab-controls">
+        <label class="search-field">
+          <span class="visually-hidden">搜索标签页</span>
+          <input id="tab-search" type="search" placeholder="搜索标题或网站">
+        </label>
+        <label class="sort-field">
+          <span class="visually-hidden">排序</span>
+          <select id="tab-sort" aria-label="标签页排序">
+            <option value="recent">最近活跃</option>
+            <option value="duration">运行时间最长</option>
+            <option value="memory">JS 堆内存最大</option>
+          </select>
+        </label>
+      </div>
       <div class="filter-bar" role="group" aria-label="标签状态筛选">
         <button class="filter is-active" data-filter="all" type="button">全部</button>
         <button class="filter" data-filter="live" type="button">可休眠</button>

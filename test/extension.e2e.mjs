@@ -89,6 +89,11 @@ try {
   assert.match(await popup.locator("#js-heap-usage").textContent(), /MB/, "popup should show total JS heap usage");
   await popup.getByLabel("标签页排序").selectOption("memory");
   assert.equal(await popup.getByLabel("标签页排序").inputValue(), "memory", "popup should allow sorting tabs by JS heap usage");
+  await popup.keyboard.press("/");
+  assert.equal(await popup.evaluate(() => document.activeElement?.id), "tab-search", "slash should focus the popup tab search");
+  await popup.getByLabel("搜索标签页").fill("alpha");
+  await popup.keyboard.press("Escape");
+  assert.equal(await popup.getByLabel("搜索标签页").inputValue(), "", "escape should clear the popup tab search");
 
   const beforeSuspensionHits = fixture.hits.get("alpha-research");
   const placeholder = await message(control, "directSuspendTab", { tabId: alphaTab.id });

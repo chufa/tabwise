@@ -86,6 +86,9 @@ async function loadDashboard() {
   $("#state").textContent = settings.autoSuspend
     ? `自动休眠开启 · ${settings.idleMinutes} 分钟阈值`
     : `${summary.unloaded} 个页面处于休眠`;
+  $("#overview-eligible").textContent = summary.eligible;
+  $("#overview-suspended").textContent = summary.unloaded;
+  $("#overview-heap").textContent = formatMemory(summary.jsHeapUsage);
   $("#measure-resources").textContent = "立即更新";
   $("#candidate-count").textContent = dashboard.candidates.length ? `${dashboard.candidates.length} 项` : "无";
   $("#candidates").className = dashboard.candidates.length ? "results" : "results empty-state";

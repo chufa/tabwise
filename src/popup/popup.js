@@ -38,9 +38,7 @@ function memoryLabel(memory) {
 function heapSummaryLabel(summary) {
   const usage = formatMemory(summary.jsHeapUsage);
   if (!usage) return "--";
-  const minutes = Math.max(0, Math.floor((Date.now() - Number(summary.jsHeapUpdatedAt || 0)) / 60_000));
-  const measuredAt = minutes < 1 ? "刚刚测量" : `${minutes} 分钟前测量`;
-  return `${usage} · ${summary.jsHeapMeasuredTabs} 页 · ${measuredAt}`;
+  return usage;
 }
 
 function protectionReason(reason) {
@@ -206,11 +204,15 @@ async function render() {
   $("#suspended-count").textContent = tabs.filter((tab) => tab.suspended).length;
   $("#duplicate-count").textContent = organization.duplicates.reduce((total, group) => total + group.tabIds.length - 1, 0);
   $("#js-heap-usage").textContent = heapSummaryLabel(summary);
-  $("#resource-note").textContent = summary.unloaded
+  const snapshotDetail = summary.jsHeapMeasuredTabs
+    ? `JS 堆采样：${summary.jsHeapMeasuredTabs} 个网页`
+    : "尚未采集网页 JS 堆数据";
+  const suspensionDetail = summary.unloaded
     ? state.data.settings.suspensionStrategy === "native-discard"
       ? `已由 Chrome 原生卸载 ${summary.unloaded} 个页面；切回时会自动重新加载。`
       : `已卸载 ${summary.unloaded} 个页面的渲染内容；点击休眠页或刷新后才会恢复。`
     : "暂无已卸载页面；休眠不会改写标签页 URL 或浏览历史。";
+  $("#resource-note").textContent = `${snapshotDetail} · ${suspensionDetail}`;
   renderAutomationState(state.data.settings);
   renderSuggestions(organization);
   renderTabs();
@@ -313,6 +315,20 @@ $("#tab-search").addEventListener("input", (event) => {
 $("#tab-sort").addEventListener("change", (event) => {
   state.sort = event.target.value;
   renderTabs();
+});
+document.addEventListener("keydown", (event) => {
+  const search = $("#tab-search");
+  const target = event.target;
+  const isTextInput = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
+  if (event.key === "/" && !isTextInput) {
+    event.preventDefault();
+    search.focus();
+  }
+  if (event.key === "Escape" && document.activeElement === search && search.value) {
+    search.value = "";
+    state.search = "";
+    renderTabs();
+  }
 });
 document.querySelector(".filter-bar").addEventListener("click", (event) => {
   const filter = event.target.closest("[data-filter]");
