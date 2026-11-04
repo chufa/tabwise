@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TabWise 页面记忆</title>
+    <link rel="stylesheet" href="sidepanel.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>TabWise</h1>
+        <p id="state">正在读取页面记忆</p>
+      </div>
+      <button id="settings" class="quiet-button" type="button">设置</button>
+    </header>
+
+    <main>
+      <label class="search-field" for="page-search">
+        <span>查找页面</span>
+        <input id="page-search" type="search" autocomplete="off" placeholder="例如：上周 React 性能文章">
+      </label>
+      <p id="search-hint" class="hint">匹配打开页面、休眠页面、工作区和恢复点，数据只在本地浏览器中处理。</p>
+      <div id="search-results" class="results empty-state">输入关键词开始查找。</div>
+
+      <section class="section">
+        <div class="section-heading">
+          <h2>可安全休眠</h2>
+          <span id="candidate-count"></span>
+        </div>
+        <p class="hint">仅显示已经通过当前保护策略和闲置阈值检查的页面。</p>
+        <div id="candidates" class="results empty-state">正在评估标签页状态。</div>
+      </section>
+
+      <section class="section">
+        <div class="section-heading">
+          <h2>页面时间线</h2>
+          <button id="save-checkpoint" class="quiet-button" type="button">保存恢复点</button>
+        </div>
+        <div id="timeline" class="timeline empty-state">正在读取本地恢复记录。</div>
+      </section>
+    </main>
+    <p id="feedback" class="feedback" role="status"></p>
+    <script type="module" src="sidepanel.js"></script>
+  </body>
+</html>

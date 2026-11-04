@@ -9,6 +9,8 @@ async function load() {
   $("#idle-minutes").value = settings.idleMinutes;
   $("#auto-suspend").checked = settings.autoSuspend;
   $(`input[name="suspension-mode"][value="${settings.suspensionMode || "conservative"}"]`).checked = true;
+  $(`input[name="suspension-strategy"][value="${settings.suspensionStrategy || "placeholder"}"]`).checked = true;
+  $("#semantic-search").checked = settings.semanticSearch;
   $("#trusted-domains").value = settings.trustedDomains.join("\n");
   $("#blocked-domains").value = settings.blockedDomains.join("\n");
 }
@@ -16,6 +18,7 @@ async function load() {
 $("#settings-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const mode = document.querySelector('input[name="suspension-mode"]:checked').value;
+  const strategy = document.querySelector('input[name="suspension-strategy"]:checked').value;
   if (mode === "smart") {
     const granted = await chrome.permissions.request({ origins: ["http://*/*", "https://*/*"] });
     if (!granted) {
@@ -34,6 +37,8 @@ $("#settings-form").addEventListener("submit", async (event) => {
       idleMinutes: Number($("#idle-minutes").value),
       autoSuspend: $("#auto-suspend").checked,
       suspensionMode: mode,
+      suspensionStrategy: strategy,
+      semanticSearch: $("#semantic-search").checked,
       trustedDomains: lines($("#trusted-domains").value),
       blockedDomains: lines($("#blocked-domains").value)
     }

@@ -8,7 +8,8 @@
     "storage",
     "alarms",
     "tabGroups",
-    "scripting"
+    "scripting",
+    "sidePanel"
   ],
   "optional_host_permissions": [
     "http://*/*",
@@ -21,6 +22,28 @@
   "action": {
     "default_title": "TabWise",
     "default_popup": "src/popup/popup.html"
+  },
+  "side_panel": {
+    "default_path": "src/sidepanel/sidepanel.html"
+  },
+  "omnibox": {
+    "keyword": "tw"
+  },
+  "commands": {
+    "open-tabwise": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+K",
+        "mac": "Command+Shift+K"
+      },
+      "description": "Open TabWise page search"
+    },
+    "save-workspace": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+S",
+        "mac": "Command+Shift+S"
+      },
+      "description": "Save the current window as a workspace"
+    }
   },
   "icons": {
     "16": "assets/icon-16.png",

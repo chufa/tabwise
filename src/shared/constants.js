@@ -8,6 +8,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   idleMinutes: 30,
   autoSuspend: false,
   suspensionMode: "conservative",
+  suspensionStrategy: "placeholder",
+  semanticSearch: false,
   trustedDomains: [],
   blockedDomains: [],
   pauseUntil: 0
@@ -16,6 +18,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
 export const SUSPENSION_MODES = Object.freeze({
   CONSERVATIVE: "conservative",
   SMART: "smart"
+});
+
+export const SUSPENSION_STRATEGIES = Object.freeze({
+  PLACEHOLDER: "placeholder",
+  NATIVE_DISCARD: "native-discard"
 });
 
 export const SUSPENSION_STATES = Object.freeze({

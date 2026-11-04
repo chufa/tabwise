@@ -36,6 +36,24 @@
           </label>
         </section>
         <section class="setting-group">
+          <h2>节能方式</h2>
+          <label class="mode-option" for="strategy-placeholder">
+            <input id="strategy-placeholder" name="suspension-strategy" type="radio" value="placeholder">
+            <span><strong>深度节能</strong><small>替换为本地休眠页。切回标签后仍保持休眠，点击页面或刷新才会恢复原网页。</small></span>
+          </label>
+          <label class="mode-option" for="strategy-native">
+            <input id="strategy-native" name="suspension-strategy" type="radio" value="native-discard">
+            <span><strong>轻度节能</strong><small>使用 Chrome 原生卸载。切回标签时浏览器会立即重新加载原网页，兼容性更高。</small></span>
+          </label>
+        </section>
+        <section class="setting-group">
+          <h2>本地关联搜索</h2>
+          <label class="switch-row" for="semantic-search">
+            <span><strong>扩展技术术语的本地关联</strong><small>例如“前端性能”可以关联 React、JavaScript、profiling 等常用词。仅在本地标题、域名和网址路径中检索，不调用外部模型。</small></span>
+            <input id="semantic-search" type="checkbox">
+          </label>
+        </section>
+        <section class="setting-group">
           <h2>可信网站</h2>
           <p class="section-copy">每行一个域名。保守模式下，只有这些网站会自动休眠；智能保护模式下，此列表不再限制自动休眠。</p>
           <label class="visually-hidden" for="trusted-domains">可信网站域名</label>

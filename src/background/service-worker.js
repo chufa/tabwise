@@ -1,12 +1,17 @@
-import { ALARM_NAME, ALARM_PERIOD_MINUTES, CHECKPOINT_ALARM_NAME, CHECKPOINT_PERIOD_MINUTES, SUSPENDED_PAGE, SUSPENSION_MODES, SUSPENSION_STATES } from "../shared/constants.js";
+import { ALARM_NAME, ALARM_PERIOD_MINUTES, CHECKPOINT_ALARM_NAME, CHECKPOINT_PERIOD_MINUTES, SUSPENDED_PAGE, SUSPENSION_MODES, SUSPENSION_STATES, SUSPENSION_STRATEGIES } from "../shared/constants.js";
 import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isSuspendableUrl, isSuspendedUrl, normalizeDomain, planLocalOrganization, smartSuspensionBlockReason, suspensionBlockReason } from "../shared/policy.js";
 import { addRecentSuspension, addRecoveryCheckpoint, addWorkspace, getActivity, getObservedAt, getRecentSuspensions, getRecord, getRecords, getRecoveryCheckpoints, getSettings, getWorkspaces, putRecord, removeActivity, removePrimaryRecord, removeRecentSuspension, removeRecord, removeRecordsForTab, saveSettings, touchTab, updateWorkspace } from "../shared/storage.js";
+import { buildSuspendCandidate, searchPageMemory } from "../shared/search.js";
 
 const extensionOrigin = chrome.runtime.getURL("").replace(/\/$/, "");
 const tabQueues = new Map();
 const PAGE_PROTECTION_KEY = "pageProtectionStates";
 const PAGE_PROTECTION_SCRIPT_ID = "tabwise-page-protection";
 const SMART_ORIGINS = ["http://*/*", "https://*/*"];
+
+function escapeOmniboxText(value) {
+  return String(value || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 
 function runForTab(tabId, work) {
   const previous = tabQueues.get(tabId) || Promise.resolve();
@@ -28,6 +33,10 @@ function sanitizeSettings(current, update) {
     suspensionMode: update.suspensionMode === SUSPENSION_MODES.SMART || update.suspensionMode === SUSPENSION_MODES.CONSERVATIVE
       ? update.suspensionMode
       : current.suspensionMode,
+    suspensionStrategy: update.suspensionStrategy === SUSPENSION_STRATEGIES.NATIVE_DISCARD || update.suspensionStrategy === SUSPENSION_STRATEGIES.PLACEHOLDER
+      ? update.suspensionStrategy
+      : current.suspensionStrategy,
+    semanticSearch: typeof update.semanticSearch === "boolean" ? update.semanticSearch : current.semanticSearch,
     trustedDomains: Array.isArray(update.trustedDomains) ? normalizeList(update.trustedDomains) : current.trustedDomains,
     blockedDomains: Array.isArray(update.blockedDomains) ? normalizeList(update.blockedDomains) : current.blockedDomains,
     pauseUntil: Number.isFinite(pauseUntil) && pauseUntil > Date.now() ? pauseUntil : 0
@@ -152,9 +161,19 @@ async function suspendTab(tabId, reason = "manual", allowProtected = false) {
         return { ok: false, reason: "Tab changed before suspension" };
       }
 
-      const expectedUrl = `${chrome.runtime.getURL(SUSPENDED_PAGE)}#${recordId}`;
-      await chrome.tabs.update(tabId, { url: expectedUrl });
-      const suspendedRecord = { ...record, mode: "placeholder", state: SUSPENSION_STATES.SUSPENDED };
+      let mode = SUSPENSION_STRATEGIES.PLACEHOLDER;
+      if (settings.suspensionStrategy === SUSPENSION_STRATEGIES.NATIVE_DISCARD) {
+        const discarded = await chrome.tabs.discard(tabId);
+        if (!discarded?.discarded) {
+          await removeRecord(recordId);
+          return { ok: false, reason: "浏览器拒绝卸载该标签页" };
+        }
+        mode = SUSPENSION_STRATEGIES.NATIVE_DISCARD;
+      } else {
+        const expectedUrl = `${chrome.runtime.getURL(SUSPENDED_PAGE)}#${recordId}`;
+        await chrome.tabs.update(tabId, { url: expectedUrl });
+      }
+      const suspendedRecord = { ...record, mode, state: SUSPENSION_STATES.SUSPENDED };
       await putRecord(suspendedRecord);
       await addRecentSuspension(suspendedRecord);
       return { ok: true, recordId };
@@ -276,10 +295,17 @@ async function getDashboard() {
       recordId: record?.recordId || "",
       suspendedAt: record?.suspendedAt || 0,
       lastActivity: activity[tab.id] || 0,
-      observedAt: observedAt[tab.id] || 0
+      observedAt: observedAt[tab.id] || 0,
+      lastAccessed: tab.lastAccessed || activity[tab.id] || 0,
+      windowId: tab.windowId
     };
   });
   const liveTabs = tabs.filter((tab) => !isSuspendedUrl(tab.url, extensionOrigin));
+  const candidates = rows
+    .map((row) => buildSuspendCandidate(row, Date.now(), settings.idleMinutes))
+    .filter((candidate) => candidate.eligible)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 12);
   return {
     settings,
     tabs: rows,
@@ -288,8 +314,92 @@ async function getDashboard() {
       eligible: rows.filter((row) => row.status === "live").length,
       protected: rows.filter((row) => row.status === "protected").length,
       unloaded: rows.filter((row) => row.suspended).length
-    }
+    },
+    candidates
   };
+}
+
+function buildPageMemory(dashboard, workspaces, checkpoints, recent) {
+  const pages = dashboard.tabs.map((tab) => ({
+    id: tab.suspended && tab.recordId ? `record:${tab.recordId}` : `tab:${tab.id}`,
+    title: tab.title,
+    url: tab.url,
+    domain: tab.domain,
+    status: tab.suspended ? "suspended" : tab.status,
+    source: tab.suspended ? "suspended" : "open",
+    tabId: tab.id,
+    recordId: tab.recordId,
+    lastAccessed: tab.lastAccessed
+  }));
+  for (const workspace of workspaces) {
+    workspace.tabs.forEach((tab, index) => pages.push({
+      id: `workspace:${workspace.id}:${index}`,
+      title: tab.title || workspace.name,
+      url: tab.url,
+      domain: domainForUrl(tab.url),
+      status: "saved",
+      source: "workspace",
+      workspaceId: workspace.id,
+      workspaceName: workspace.name,
+      lastAccessed: workspace.createdAt
+    }));
+  }
+  for (const checkpoint of checkpoints) {
+    checkpoint.tabs.forEach((tab, index) => pages.push({
+      id: `checkpoint:${checkpoint.id}:${index}`,
+      title: tab.title || "恢复点页面",
+      url: tab.url,
+      domain: domainForUrl(tab.url),
+      status: "saved",
+      source: "checkpoint",
+      checkpointId: checkpoint.id,
+      lastAccessed: checkpoint.createdAt
+    }));
+  }
+  for (const record of recent) {
+    pages.push({
+      id: `recent:${record.recordId}`,
+      title: record.title || record.originalUrl,
+      url: record.originalUrl,
+      domain: domainForUrl(record.originalUrl),
+      status: "suspended",
+      source: "recent",
+      recordId: record.recordId,
+      tabId: record.tabId,
+      lastAccessed: record.suspendedAt
+    });
+  }
+  return [...new Map(pages.map((page) => [`${page.source}:${page.id}`, page])).values()];
+}
+
+async function searchPages(query, limit) {
+  const [dashboard, workspaces, checkpoints, recent, settings] = await Promise.all([
+    getDashboard(),
+    getWorkspaces(),
+    getRecoveryCheckpoints(),
+    getRecentSuspensions(),
+    getSettings()
+  ]);
+  return searchPageMemory(buildPageMemory(dashboard, workspaces, checkpoints, recent), query, limit, { semantic: settings.semanticSearch });
+}
+
+async function openSearchResult(result) {
+  if (!result || typeof result !== "object") return { ok: false, reason: "搜索结果无效" };
+  if (result.source === "open") return focusTab(result.tabId);
+  if (result.source === "suspended" && result.recordId) {
+    const restored = await restoreRecord(result.recordId);
+    if (restored.ok) await focusTab(result.tabId);
+    return restored;
+  }
+  if (result.source === "recent" && result.recordId) return restoreRecentSuspension(result.recordId);
+  if (result.source === "workspace" && result.workspaceId) {
+    const workspace = (await getWorkspaces()).find((item) => item.id === result.workspaceId);
+    if (!workspace) return { ok: false, reason: "工作区不存在" };
+    for (const item of workspace.tabs) await chrome.tabs.create({ url: item.url, active: false });
+    return { ok: true, count: workspace.tabs.length };
+  }
+  if (result.source === "checkpoint" && result.checkpointId) return restoreCheckpoint(result.checkpointId);
+  return { ok: false, reason: "暂不支持打开该搜索结果" };
 }
 
 async function getSuspendedRecordForSender(recordId, sender) {
@@ -373,6 +483,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   await ensureAlarm();
   await ensureCheckpointAlarm();
   await recordExistingTabs();
+  await chrome.omnibox.setDefaultSuggestion({ description: "搜索 TabWise 本地页面记忆" });
   if ((await getSettings()).suspensionMode === SUSPENSION_MODES.SMART) {
     await registerProtectionScript();
     await initializeExistingProtection();
@@ -385,6 +496,37 @@ chrome.runtime.onStartup.addListener(async () => {
   if ((await getSettings()).suspensionMode === SUSPENSION_MODES.SMART) {
     await registerProtectionScript();
     await initializeExistingProtection();
+  }
+});
+chrome.commands.onCommand.addListener((command) => {
+  if (command === "open-tabwise") {
+    chrome.windows.getLastFocused().then((window) => chrome.sidePanel.open({ windowId: window.id })).catch(console.error);
+  }
+  if (command === "save-workspace") {
+    chrome.tabs.query({ currentWindow: true }).then(async (tabs) => {
+      await addWorkspace({
+        id: crypto.randomUUID(),
+        name: `Workspace ${new Date().toLocaleDateString()}`,
+        createdAt: Date.now(),
+        tabs: tabs.filter((tab) => isSuspendableUrl(tab.url)).map((tab) => ({ title: tab.title || "", url: tab.url }))
+      });
+    }).catch(console.error);
+  }
+});
+chrome.omnibox.onInputChanged.addListener((text, suggest) => {
+  searchPages(text, 6)
+    .then((results) => suggest(results.map((result) => ({
+      content: JSON.stringify({ id: result.id, source: result.source, tabId: result.tabId, recordId: result.recordId, workspaceId: result.workspaceId, checkpointId: result.checkpointId }),
+      description: `<match>${escapeOmniboxText(result.title)}</match> <dim>${escapeOmniboxText(result.domain || result.source)}</dim>`
+    }))))
+    .catch(() => suggest([]));
+});
+chrome.omnibox.onInputEntered.addListener((text) => {
+  try {
+    const result = JSON.parse(text);
+    openSearchResult(result).catch(console.error);
+  } catch {
+    searchPages(text, 1).then((results) => results[0] && openSearchResult(results[0])).catch(console.error);
   }
 });
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -416,6 +558,8 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tasks = {
     getDashboard,
+    searchPages: () => searchPages(message.query, message.limit),
+    openSearchResult: () => openSearchResult(message.result),
     getSuspendedRecord: () => getSuspendedRecordForSender(message.recordId, sender),
     suspendTab: () => suspendTab(message.tabId),
     directSuspendTab: () => suspendTab(message.tabId, "direct", true),

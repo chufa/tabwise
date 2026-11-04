@@ -182,7 +182,9 @@ async function render() {
   $("#suspended-count").textContent = tabs.filter((tab) => tab.suspended).length;
   $("#duplicate-count").textContent = organization.duplicates.reduce((total, group) => total + group.tabIds.length - 1, 0);
   $("#resource-note").textContent = summary.unloaded
-    ? `已卸载 ${summary.unloaded} 个页面的渲染内容；切回休眠标签时 Chrome 会自动重新加载。`
+    ? state.data.settings.suspensionStrategy === "native-discard"
+      ? `已由 Chrome 原生卸载 ${summary.unloaded} 个页面；切回时会自动重新加载。`
+      : `已卸载 ${summary.unloaded} 个页面的渲染内容；点击休眠页或刷新后才会恢复。`
     : "暂无已卸载页面；休眠不会改写标签页 URL 或浏览历史。";
   renderAutomationState(state.data.settings);
   renderSuggestions(organization);
@@ -255,6 +257,11 @@ document.body.addEventListener("click", async (event) => {
 });
 
 $("#settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
+$("#open-search").addEventListener("click", async () => {
+  const currentWindow = await chrome.windows.getCurrent();
+  await chrome.sidePanel.open({ windowId: currentWindow.id });
+  globalThis.window.close();
+});
 $("#refresh").addEventListener("click", async () => { await render(); setFeedback("已刷新标签状态"); });
 $("#pause-automation").addEventListener("click", async () => {
   const paused = state.data.settings.pauseUntil > Date.now();
