@@ -11,8 +11,12 @@
       <div class="mark" aria-hidden="true">T</div>
       <h1 id="title">此标签页正在休眠</h1>
       <p id="detail">原始页面已卸载，恢复前不会占用其渲染资源。</p>
+      <dl id="timing" class="timing" hidden>
+        <div><dt>开始休眠</dt><dd id="suspended-at">-</dd></div>
+        <div><dt>已休眠</dt><dd id="suspended-for">-</dd></div>
+      </dl>
       <button id="restore" type="button">恢复页面</button>
-      <p id="hint">也可以刷新当前标签页来恢复。</p>
+      <p id="hint">点击页面任意位置或刷新当前标签页即可恢复。</p>
       <p id="error" role="alert"></p>
     </main>
     <script type="module" src="suspended.js"></script>

@@ -125,40 +125,43 @@ async function isIdleEnough(tabId, thresholdMs) {
 
 async function suspendTab(tabId, reason = "manual", allowProtected = false) {
   return runForTab(tabId, async () => {
-    const [settings, tab] = await Promise.all([getSettings(), chrome.tabs.get(tabId)]);
-    const blockReason = allowProtected
-      ? directSuspensionBlockReason(tab, extensionOrigin)
-      : suspensionBlockReason(tab, settings, extensionOrigin);
-    if (blockReason) return { ok: false, reason: blockReason };
+    let recordId;
+    try {
+      const [settings, tab] = await Promise.all([getSettings(), chrome.tabs.get(tabId)]);
+      const blockReason = allowProtected
+        ? directSuspensionBlockReason(tab, extensionOrigin)
+        : suspensionBlockReason(tab, settings, extensionOrigin);
+      if (blockReason) return { ok: false, reason: blockReason };
 
-    const recordId = crypto.randomUUID();
-    const record = {
-      recordId,
-      tabId,
-      windowId: tab.windowId,
-      originalUrl: tab.url,
-      title: tab.title || domainForUrl(tab.url),
-      suspendedAt: Date.now(),
-      state: SUSPENSION_STATES.SUSPENDING,
-      reason
-    };
-    await putRecord(record);
+      recordId = crypto.randomUUID();
+      const record = {
+        recordId,
+        tabId,
+        windowId: tab.windowId,
+        originalUrl: tab.url,
+        title: tab.title || domainForUrl(tab.url),
+        suspendedAt: Date.now(),
+        state: SUSPENSION_STATES.SUSPENDING,
+        reason
+      };
+      await putRecord(record);
 
-    const freshTab = await chrome.tabs.get(tabId);
-    if (freshTab.url !== tab.url || freshTab.active) {
-      await removeRecord(recordId);
-      return { ok: false, reason: "Tab changed before suspension" };
+      const freshTab = await chrome.tabs.get(tabId);
+      if (freshTab.url !== tab.url || freshTab.active) {
+        await removeRecord(recordId);
+        return { ok: false, reason: "Tab changed before suspension" };
+      }
+
+      const expectedUrl = `${chrome.runtime.getURL(SUSPENDED_PAGE)}#${recordId}`;
+      await chrome.tabs.update(tabId, { url: expectedUrl });
+      const suspendedRecord = { ...record, mode: "placeholder", state: SUSPENSION_STATES.SUSPENDED };
+      await putRecord(suspendedRecord);
+      await addRecentSuspension(suspendedRecord);
+      return { ok: true, recordId };
+    } catch (error) {
+      if (recordId) await removeRecord(recordId);
+      return { ok: false, reason: error.message || "休眠操作失败" };
     }
-
-    const discardedTab = await chrome.tabs.discard(tabId);
-    if (!discardedTab?.discarded) {
-      await removeRecord(recordId);
-      return { ok: false, reason: "浏览器未能卸载该标签页" };
-    }
-    const suspendedRecord = { ...record, mode: "native-discard", state: SUSPENSION_STATES.SUSPENDED };
-    await putRecord(suspendedRecord);
-    await addRecentSuspension(suspendedRecord);
-    return { ok: true, recordId };
   });
 }
 
@@ -229,7 +232,9 @@ async function restoreRecentSuspension(recordId) {
   const record = recent.find((item) => item.recordId === recordId);
   if (!record) return { ok: false, reason: "最近休眠记录不存在" };
   const tab = await chrome.tabs.get(record.tabId).catch(() => null);
-  if (tab && tab.url === record.originalUrl && tab.discarded) {
+  if (tab && record.mode === "placeholder" && isExpectedSuspensionUrl(tab.url, extensionOrigin, record.recordId)) {
+    await chrome.tabs.update(tab.id, { url: record.originalUrl });
+  } else if (tab && tab.url === record.originalUrl && tab.discarded) {
     await chrome.tabs.reload(tab.id);
   } else {
     await chrome.tabs.create({ url: record.originalUrl, active: true });

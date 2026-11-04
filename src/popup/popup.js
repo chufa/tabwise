@@ -1,7 +1,7 @@
 import { escapeHtml } from "../shared/html.js";
 
 const $ = (selector) => document.querySelector(selector);
-const state = { data: null, filter: "all", search: "", workspaceSearch: "", workspaces: [], recent: [], checkpoints: [], expandedSuggestions: new Set() };
+const state = { data: null, filter: "all", search: "", workspaceSearch: "", workspaces: [], recent: [], checkpoints: [], expandedSuggestions: new Set(), tabMessages: new Map() };
 
 function formatRelativeTime(timestamp) {
   if (!timestamp) return "刚开始追踪";
@@ -31,9 +31,21 @@ function protectionReason(reason) {
     "Already discarded by browser": "已由浏览器卸载",
     "Not a web page": "浏览器内部页面",
     "Never suspend domain": "在永不休眠列表中",
-    "Untrusted domain": "未信任的网站"
+    "Untrusted domain": "未信任的网站",
+    "Protection status unknown": "页面保护状态未就绪"
   };
   return labels[reason] || reason;
+}
+
+function actionMessage(reason) {
+  const labels = {
+    "Active tab": "请先切换到其他标签页",
+    "Still loading": "页面仍在加载，请稍后再试",
+    "Already discarded by browser": "该页面已被浏览器卸载",
+    "Tab changed before suspension": "标签状态已变化，请刷新后重试",
+    "浏览器拒绝卸载该标签页": "浏览器拒绝卸载此页面"
+  };
+  return labels[reason] || reason || "操作未完成";
 }
 
 function row({ title, subtitle, action = "", secondaryAction = "", id = "", badge = "", tabIds = [] }) {
@@ -123,9 +135,10 @@ function renderTabs() {
     const subtitle = tab.suspended
       ? `已休眠 ${formatDuration(tab.suspendedAt)} · 已观察 ${formatDuration(tab.observedAt)}`
       : isProtected ? `${protectionReason(tab.reason)} · 已观察 ${formatDuration(tab.observedAt)}` : `${tab.domain} · ${formatRelativeTime(tab.lastActivity)} · 已观察 ${formatDuration(tab.observedAt)}`;
+    const rowMessage = state.tabMessages.get(tab.id);
     return row({
       title: tab.title,
-      subtitle,
+      subtitle: rowMessage ? `${subtitle} · ${rowMessage}` : subtitle,
       action,
       secondaryAction,
       id: tab.suspended ? (tab.recordId || tab.id) : tab.id,
@@ -200,7 +213,7 @@ document.body.addEventListener("click", async (event) => {
   button.disabled = true;
   const { action, id } = button.dataset;
   let result;
-  if (action === "suspend") result = await send({ type: "suspendTab", tabId: Number(id) });
+  if (action === "suspend") result = await send({ type: "directSuspendTab", tabId: Number(id) });
   if (action === "direct-suspend") result = await send({ type: "directSuspendTab", tabId: Number(id) });
   if (action === "restore") {
     result = Number.isInteger(Number(id)) && String(Number(id)) === id
@@ -234,7 +247,10 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
   if (action === "group") result = await send({ type: "groupTabs", title: id, tabIds: JSON.parse(button.dataset.tabIds || "[]") });
-  setFeedback(result?.ok ? action === "group" ? `已分组 ${result.count} 个标签页` : "操作已完成" : result?.reason || "操作未完成", !result?.ok);
+  if (action === "suspend" || action === "direct-suspend") {
+    state.tabMessages.set(Number(id), result?.ok ? "已进入休眠" : actionMessage(result?.reason));
+  }
+  setFeedback(result?.ok ? action === "group" ? `已分组 ${result.count} 个标签页` : "操作已完成" : actionMessage(result?.reason), !result?.ok);
   await render();
 });
 

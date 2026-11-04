@@ -1,6 +1,6 @@
 # TabWise
 
-TabWise 是一个本地优先的 Chrome/Edge 标签管理扩展。它会使用浏览器原生休眠卸载符合安全条件的闲置页面，不改变标签 URL 或浏览历史；切回休眠标签时，Chrome 会自动重新加载页面。
+TabWise 是一个本地优先的 Chrome/Edge 标签管理扩展。它会将符合安全条件的闲置页面替换为本地休眠页，从而卸载原始文档；点击休眠页任意位置或刷新标签页即可恢复原页面。
 
 ## What the MVP includes
 
@@ -30,9 +30,9 @@ TabWise 是一个本地优先的 Chrome/Edge 标签管理扩展。它会使用�
 
 ## Notes and limits
 
-- Native tab discard can substantially reduce page renderer work, but cannot promise zero browser resource use.
+- 休眠页仍有少量扩展渲染开销，但原网页文档会被卸载，不能承诺零资源占用。
 - Unknown pages are deliberately not suspended automatically. This avoids losing unsaved form data or interrupting web apps.
-- Clicking a suspended tab lets Chrome reload the original page. No placeholder page or additional history entry is created.
+- 切回休眠标签不会自动恢复；点击休眠页内容或刷新标签页才会恢复原页面。
 - Workspaces store URLs and titles locally and reopening them cannot restore in-page state, POST submissions, or unsaved edits.
 
 ## Development checks
