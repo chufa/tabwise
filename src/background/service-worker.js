@@ -3,6 +3,8 @@ import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isI
 import { addRecentSuspension, addRecoveryCheckpoint, addWorkspace, getActivity, getObservedAt, getRecentSuspensions, getRecord, getRecords, getRecoveryCheckpoints, getResourceSnapshots, getSettings, getWorkspaces, putRecord, removeActivity, removePrimaryRecord, removeRecentSuspension, removeRecord, removeRecordsForTab, removeResourceSnapshot, saveResourceSnapshots, saveSettings, touchTab, updateWorkspace } from "../shared/storage.js";
 import { buildSuspendCandidate, searchPageMemory } from "../shared/search.js";
 import { buildHeapDiagnostics, buildRendererDiagnostics, summarizeHeapSnapshots } from "../shared/resource.js";
+import { buildLocalAiPrompt, buildResourceReclaimPlan } from "../shared/insights.js";
+import { buildOllamaRequest, normalizeOllamaEndpoint, normalizeOllamaModel } from "../shared/ollama.js";
 
 const extensionOrigin = chrome.runtime.getURL("").replace(/\/$/, "");
 const tabQueues = new Map();
@@ -39,6 +41,13 @@ function sanitizeSettings(current, update) {
       ? update.suspensionStrategy
       : current.suspensionStrategy,
     semanticSearch: typeof update.semanticSearch === "boolean" ? update.semanticSearch : current.semanticSearch,
+    aiProvider: update.aiProvider === "ollama" || update.aiProvider === "browser" ? update.aiProvider : current.aiProvider,
+    ollamaEndpoint: typeof update.ollamaEndpoint === "string"
+      ? normalizeOllamaEndpoint(update.ollamaEndpoint, current.ollamaEndpoint)
+      : current.ollamaEndpoint,
+    ollamaModel: typeof update.ollamaModel === "string"
+      ? normalizeOllamaModel(update.ollamaModel, current.ollamaModel)
+      : current.ollamaModel,
     resourceSampling: typeof update.resourceSampling === "boolean" ? update.resourceSampling : current.resourceSampling,
     trustedDomains: Array.isArray(update.trustedDomains) ? normalizeList(update.trustedDomains) : current.trustedDomains,
     blockedDomains: Array.isArray(update.blockedDomains) ? normalizeList(update.blockedDomains) : current.blockedDomains,
@@ -307,6 +316,7 @@ async function getDashboard() {
     .filter((candidate) => candidate.eligible)
     .sort((left, right) => right.score - left.score)
     .slice(0, 12);
+  const reclaimPlan = buildResourceReclaimPlan(rows, candidates);
   return {
     settings,
     tabs: rows,
@@ -315,9 +325,11 @@ async function getDashboard() {
       eligible: rows.filter((row) => row.status === "live").length,
       protected: rows.filter((row) => row.status === "protected").length,
       unloaded: rows.filter((row) => row.suspended).length,
-      ...summarizeHeapSnapshots(resourceSnapshots)
+      ...summarizeHeapSnapshots(resourceSnapshots),
+      reclaimableJSHeap: reclaimPlan.reclaimableJSHeap,
+      reclaimableMeasuredTabs: reclaimPlan.reclaimableMeasuredTabs
     },
-    candidates
+    candidates: reclaimPlan.candidates
   };
 }
 
@@ -476,6 +488,53 @@ async function enableResourceSampling() {
   return { ok: true };
 }
 
+async function fetchOllama(endpoint, path, init = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const response = await fetch(`${endpoint}${path}`, { ...init, signal: controller.signal, cache: "no-store" });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(body?.error || `Ollama 返回 HTTP ${response.status}`);
+    return body;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function testOllamaConnection() {
+  const settings = await getSettings();
+  const endpoint = normalizeOllamaEndpoint(settings.ollamaEndpoint);
+  if (!endpoint) return { ok: false, reason: "Ollama 地址必须是本机 loopback HTTP 地址。" };
+  try {
+    const body = await fetchOllama(endpoint, "/api/tags");
+    const models = Array.isArray(body?.models)
+      ? body.models.map((model) => normalizeOllamaModel(model?.name)).filter(Boolean).slice(0, 20)
+      : [];
+    return { ok: true, models };
+  } catch (error) {
+    return { ok: false, reason: error.name === "AbortError" ? "连接 Ollama 超时。" : "无法连接 Ollama，请确认服务正在运行。" };
+  }
+}
+
+async function generateOllamaBrief(request) {
+  const settings = await getSettings();
+  if (settings.aiProvider !== "ollama") return { ok: false, reason: "请先在设置中选择 Ollama。" };
+  const endpoint = normalizeOllamaEndpoint(settings.ollamaEndpoint);
+  if (!endpoint || !settings.ollamaModel) return { ok: false, reason: "请在设置中填写本地 Ollama 地址和模型名。" };
+  try {
+    const dashboard = await getDashboard();
+    const body = await fetchOllama(endpoint, "/api/generate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(buildOllamaRequest(buildLocalAiPrompt(dashboard.tabs, request), settings.ollamaModel))
+    });
+    const answer = String(body?.response || "").trim().slice(0, 8_000);
+    return answer ? { ok: true, answer } : { ok: false, reason: "Ollama 未返回可用建议。" };
+  } catch (error) {
+    return { ok: false, reason: error.name === "AbortError" ? "Ollama 生成超时。" : "Ollama 未能生成建议，请检查模型是否已安装。" };
+  }
+}
+
 async function getSuspendedRecordForSender(recordId, sender) {
   const record = await getRecord(recordId);
   const expected = `${chrome.runtime.getURL(SUSPENDED_PAGE)}#${recordId}`;
@@ -537,6 +596,8 @@ function backupWorkspace(workspace) {
     name: String(workspace?.name || "导入的工作区").trim().slice(0, 80) || "导入的工作区",
     createdAt: Number.isFinite(workspace?.createdAt) ? workspace.createdAt : Date.now(),
     pinned: Boolean(workspace?.pinned),
+    archived: Boolean(workspace?.archived),
+    archivedAt: Number.isFinite(workspace?.archivedAt) ? workspace.archivedAt : 0,
     tabs
   };
 }
@@ -643,6 +704,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     getDashboard,
     getResourceDiagnostics,
     enableResourceSampling,
+    testOllamaConnection,
+    generateOllamaBrief: () => generateOllamaBrief(message.request),
     searchPages: () => searchPages(message.query, message.limit),
     openSearchResult: () => openSearchResult(message.result),
     getSuspendedRecord: () => getSuspendedRecordForSender(message.recordId, sender),
@@ -667,6 +730,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         id: crypto.randomUUID(),
         name: message.name?.trim().slice(0, 80) || `Workspace ${new Date().toLocaleDateString()}`,
         createdAt: Date.now(),
+        archived: false,
         tabs: tabs.filter((tab) => /^https?:/.test(tab.url || "")).map((tab) => ({ title: tab.title || "", url: tab.url }))
       };
       await addWorkspace(workspace);
@@ -690,6 +754,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const workspace = workspaces.find((item) => item.id === message.workspaceId);
       if (!workspace) throw new Error("Workspace was not found");
       for (const item of workspace.tabs) await chrome.tabs.create({ url: item.url, active: false });
+      if (workspace.archived) await updateWorkspace(workspace.id, { archived: false, resumedAt: Date.now() });
       return { ok: true, count: workspace.tabs.length };
     },
     toggleWorkspacePinned: async () => {
@@ -698,6 +763,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!workspace) throw new Error("工作区不存在");
       const updated = await updateWorkspace(workspace.id, { pinned: !workspace.pinned });
       return { ok: true, pinned: updated.pinned };
+    },
+    toggleWorkspaceArchived: async () => {
+      const workspaces = await getWorkspaces();
+      const workspace = workspaces.find((item) => item.id === message.workspaceId);
+      if (!workspace) throw new Error("工作区不存在");
+      const archived = !workspace.archived;
+      const updated = await updateWorkspace(workspace.id, { archived, archivedAt: archived ? Date.now() : 0 });
+      return { ok: true, archived: updated.archived };
     },
     groupTabs: async () => {
       const requestedIds = [...new Set(message.tabIds || [])].filter(Number.isInteger);

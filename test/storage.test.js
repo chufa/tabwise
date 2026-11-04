@@ -27,16 +27,19 @@ globalThis.chrome = {
 const {
   addRecentSuspension,
   addRecoveryCheckpoint,
+  addWorkspace,
   getRecentSuspensions,
   getRecoveryCheckpoints,
   getResourceSnapshots,
   getRecord,
+  getWorkspaces,
   putRecord,
   removePrimaryRecord,
   removeRecord,
   removeRecordsForTab,
   removeResourceSnapshot,
-  saveResourceSnapshots
+  saveResourceSnapshots,
+  updateWorkspace
 } = await import("../src/shared/storage.js");
 
 test("keeps a restore record when its primary dashboard record is cleared", async () => {
@@ -93,4 +96,19 @@ test("stores current-session page memory snapshots by tab id", async () => {
   assert.equal(snapshots[7].updatedAt, 1_000);
   await removeResourceSnapshot(7);
   assert.equal((await getResourceSnapshots())[7], undefined);
+});
+
+test("keeps archived workspaces available for later resumption", async () => {
+  await addWorkspace({
+    id: "workspace-archive",
+    name: "Research",
+    createdAt: 1,
+    pinned: false,
+    archived: false,
+    tabs: [{ title: "Example", url: "https://example.com" }]
+  });
+  const archived = await updateWorkspace("workspace-archive", { archived: true, archivedAt: 2 });
+
+  assert.equal(archived.archived, true);
+  assert.equal((await getWorkspaces()).find((workspace) => workspace.id === "workspace-archive").archivedAt, 2);
 });

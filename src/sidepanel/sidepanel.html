@@ -36,7 +36,7 @@
           <h2>可安全休眠</h2>
           <span id="candidate-count"></span>
         </div>
-        <p class="hint">仅显示已经通过当前保护策略和闲置阈值检查的页面。</p>
+        <p id="reclaim-summary" class="hint">仅显示已经通过当前保护策略和闲置阈值检查的页面。</p>
         <div id="candidates" class="results empty-state">正在评估标签页状态。</div>
       </section>
 
@@ -47,6 +47,20 @@
         </div>
         <p class="hint">所有 Chrome 网页均按 1 分钟休眠检查周期更新 JS 堆内存；Dev/Canary 可额外显示共享 Renderer 私有内存。</p>
         <div id="renderer-diagnostics" class="results empty-state">按需测量当前网页的内存。</div>
+      </section>
+
+      <section class="section">
+        <div class="section-heading">
+          <h2>本地 AI 整理</h2>
+          <span id="ai-status">未运行</span>
+        </div>
+        <p class="hint">仅在点击生成后使用所选本地提供方处理当前网页的标题、域名和状态；不会上传页面正文或执行标签操作。</p>
+        <label class="ai-request-field" for="ai-request">
+          <span>希望整理什么？</span>
+          <input id="ai-request" maxlength="240" placeholder="例如：按研究主题分组，并指出可稍后处理的页面">
+        </label>
+        <div class="ai-actions"><button id="generate-ai-brief" class="action-button" type="button">生成本地建议</button></div>
+        <div id="ai-brief" class="ai-brief empty-state">浏览器支持本地模型时，可在这里生成建议。</div>
       </section>
 
       <section class="section">

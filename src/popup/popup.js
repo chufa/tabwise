@@ -67,14 +67,15 @@ function actionMessage(reason) {
   return labels[reason] || reason || "操作未完成";
 }
 
-function row({ title, subtitle, action = "", secondaryAction = "", id = "", badge = "", tabIds = [] }) {
+function row({ title, subtitle, action = "", secondaryAction = "", tertiaryAction = "", id = "", badge = "", tabIds = [] }) {
   const tabData = tabIds.length ? ` data-tab-ids="${escapeHtml(JSON.stringify(tabIds))}"` : "";
   const actionId = action?.id || id;
   const secondaryActionId = secondaryAction?.id || id;
+  const tertiaryActionId = tertiaryAction?.id || id;
   return `<div class="row">
     <div class="row-main"><strong title="${escapeHtml(title)}">${escapeHtml(title)}</strong><span title="${escapeHtml(subtitle)}">${escapeHtml(subtitle)}</span></div>
     ${badge ? `<span class="status-badge ${badge === "休眠中" ? "resting" : ""}">${escapeHtml(badge)}</span>` : ""}
-    ${action || secondaryAction ? `<div class="row-actions">${secondaryAction ? `<button class="action-button" data-action="${secondaryAction.type}" data-id="${escapeHtml(secondaryActionId)}" type="button">${escapeHtml(secondaryAction.label)}</button>` : ""}${action ? `<button class="action-button" data-action="${action.type}" data-id="${escapeHtml(actionId)}"${tabData} type="button">${escapeHtml(action.label)}</button>` : ""}</div>` : ""}
+    ${action || secondaryAction || tertiaryAction ? `<div class="row-actions">${tertiaryAction ? `<button class="action-button" data-action="${tertiaryAction.type}" data-id="${escapeHtml(tertiaryActionId)}" type="button">${escapeHtml(tertiaryAction.label)}</button>` : ""}${secondaryAction ? `<button class="action-button" data-action="${secondaryAction.type}" data-id="${escapeHtml(secondaryActionId)}" type="button">${escapeHtml(secondaryAction.label)}</button>` : ""}${action ? `<button class="action-button" data-action="${action.type}" data-id="${escapeHtml(actionId)}"${tabData} type="button">${escapeHtml(action.label)}</button>` : ""}</div>` : ""}
   </div>`;
 }
 
@@ -207,12 +208,15 @@ async function render() {
   const snapshotDetail = summary.jsHeapMeasuredTabs
     ? `JS 堆采样：${summary.jsHeapMeasuredTabs} 个网页`
     : "尚未采集网页 JS 堆数据";
+  const reclaimDetail = summary.reclaimableMeasuredTabs
+    ? `候选预计可释放 ${formatMemory(summary.reclaimableJSHeap)}`
+    : "暂无可估算的回收候选";
   const suspensionDetail = summary.unloaded
     ? state.data.settings.suspensionStrategy === "native-discard"
       ? `已由 Chrome 原生卸载 ${summary.unloaded} 个页面；切回时会自动重新加载。`
       : `已卸载 ${summary.unloaded} 个页面的渲染内容；点击休眠页或刷新后才会恢复。`
     : "暂无已卸载页面；休眠不会改写标签页 URL 或浏览历史。";
-  $("#resource-note").textContent = `${snapshotDetail} · ${suspensionDetail}`;
+  $("#resource-note").textContent = `${snapshotDetail} · ${reclaimDetail} · ${suspensionDetail}`;
   renderAutomationState(state.data.settings);
   renderSuggestions(organization);
   renderTabs();
@@ -228,11 +232,12 @@ async function render() {
   $("#workspaces").className = workspaces.length ? "list" : "list empty-state";
   $("#workspaces").innerHTML = workspaces.slice(0, 5).map((workspace) => row({
     title: workspace.name,
-    subtitle: `${workspace.tabs.length} 个标签页 · ${new Date(workspace.createdAt).toLocaleDateString()}`,
-    action: { type: "open-workspace", label: "打开" },
+    subtitle: `${workspace.tabs.length} 个标签页 · ${workspace.archived ? "已归档" : new Date(workspace.createdAt).toLocaleDateString()}`,
+    action: { type: "open-workspace", label: workspace.archived ? "恢复" : "打开" },
     secondaryAction: { type: "toggle-workspace-pinned", label: workspace.pinned ? "取消固定" : "固定" },
+    tertiaryAction: { type: "toggle-workspace-archived", label: workspace.archived ? "取消归档" : "归档" },
     id: workspace.id,
-    badge: workspace.pinned ? "已固定" : ""
+    badge: workspace.archived ? "已归档" : workspace.pinned ? "已固定" : ""
   })).join("") || "保存窗口状态后，可在这里一键重新打开。";
 }
 
@@ -269,6 +274,7 @@ document.body.addEventListener("click", async (event) => {
     result = await send({ type: "openWorkspace", workspaceId: id });
   }
   if (action === "toggle-workspace-pinned") result = await send({ type: "toggleWorkspacePinned", workspaceId: id });
+  if (action === "toggle-workspace-archived") result = await send({ type: "toggleWorkspaceArchived", workspaceId: id });
   if (action === "toggle-suggestion") {
     if (state.expandedSuggestions.has(id)) state.expandedSuggestions.delete(id);
     else state.expandedSuggestions.add(id);

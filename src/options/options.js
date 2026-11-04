@@ -11,6 +11,10 @@ async function load() {
   $(`input[name="suspension-mode"][value="${settings.suspensionMode || "conservative"}"]`).checked = true;
   $(`input[name="suspension-strategy"][value="${settings.suspensionStrategy || "placeholder"}"]`).checked = true;
   $("#semantic-search").checked = settings.semanticSearch;
+  $(`input[name="ai-provider"][value="${settings.aiProvider || "browser"}"]`).checked = true;
+  $("#ollama-endpoint").value = settings.ollamaEndpoint || "http://127.0.0.1:11434";
+  $("#ollama-model").value = settings.ollamaModel || "";
+  syncOllamaConfig();
   $("#trusted-domains").value = settings.trustedDomains.join("\n");
   $("#blocked-domains").value = settings.blockedDomains.join("\n");
 }
@@ -19,6 +23,7 @@ $("#settings-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const mode = document.querySelector('input[name="suspension-mode"]:checked').value;
   const strategy = document.querySelector('input[name="suspension-strategy"]:checked').value;
+  const aiProvider = document.querySelector('input[name="ai-provider"]:checked').value;
   if (mode === "smart") {
     const granted = await chrome.permissions.request({ origins: ["http://*/*", "https://*/*"] });
     if (!granted) {
@@ -39,12 +44,42 @@ $("#settings-form").addEventListener("submit", async (event) => {
       suspensionMode: mode,
       suspensionStrategy: strategy,
       semanticSearch: $("#semantic-search").checked,
+      aiProvider,
+      ollamaEndpoint: $("#ollama-endpoint").value,
+      ollamaModel: $("#ollama-model").value,
       trustedDomains: lines($("#trusted-domains").value),
       blockedDomains: lines($("#blocked-domains").value)
     }
   });
   $("#saved").textContent = "已保存";
   setTimeout(() => { $("#saved").textContent = ""; }, 1600);
+});
+
+function syncOllamaConfig() {
+  $("#ollama-config").hidden = document.querySelector('input[name="ai-provider"]:checked').value !== "ollama";
+}
+
+document.querySelectorAll('input[name="ai-provider"]').forEach((input) => input.addEventListener("change", syncOllamaConfig));
+
+$("#test-ollama").addEventListener("click", async () => {
+  const button = $("#test-ollama");
+  button.disabled = true;
+  $("#ollama-feedback").textContent = "正在连接…";
+  await chrome.runtime.sendMessage({
+    type: "updateSettings",
+    settings: {
+      ollamaEndpoint: $("#ollama-endpoint").value,
+      ollamaModel: $("#ollama-model").value
+    }
+  });
+  const result = await chrome.runtime.sendMessage({ type: "testOllamaConnection" });
+  if (result.ok) {
+    if (!$("#ollama-model").value && result.models[0]) $("#ollama-model").value = result.models[0];
+    $("#ollama-feedback").textContent = result.models.length ? `已连接，发现 ${result.models.length} 个模型` : "已连接";
+  } else {
+    $("#ollama-feedback").textContent = result.reason;
+  }
+  button.disabled = false;
 });
 
 $("#export-backup").addEventListener("click", async () => {

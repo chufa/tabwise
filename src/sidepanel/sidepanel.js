@@ -1,4 +1,5 @@
 import { escapeHtml } from "../shared/html.js";
+import { buildLocalAiPrompt } from "../shared/insights.js";
 
 const $ = (selector) => document.querySelector(selector);
 let searchTimer;
@@ -41,7 +42,7 @@ function candidateRow(candidate) {
   return `<article class="result">
     <div class="result-copy">
       <strong title="${escapeHtml(tab.title)}">${escapeHtml(tab.title)}</strong>
-      <span>${escapeHtml(candidate.explanation)}</span>
+      <span>${escapeHtml([candidate.explanation, candidate.estimatedJSHeap ? `预计释放 ${formatMemory(candidate.estimatedJSHeap)}` : ""].filter(Boolean).join(" · "))}</span>
     </div>
     <button class="action-button" data-action="suspend" data-tab-id="${tab.id}" type="button">休眠</button>
   </article>`;
@@ -89,8 +90,12 @@ async function loadDashboard() {
   $("#overview-eligible").textContent = summary.eligible;
   $("#overview-suspended").textContent = summary.unloaded;
   $("#overview-heap").textContent = formatMemory(summary.jsHeapUsage);
+  $("#ai-status").textContent = settings.aiProvider === "ollama" ? "Ollama" : "浏览器内置";
   $("#measure-resources").textContent = "立即更新";
   $("#candidate-count").textContent = dashboard.candidates.length ? `${dashboard.candidates.length} 项` : "无";
+  $("#reclaim-summary").textContent = dashboard.summary.reclaimableMeasuredTabs
+    ? `${dashboard.candidates.length} 个候选中，有 ${dashboard.summary.reclaimableMeasuredTabs} 个已采样；预计可释放 ${formatMemory(dashboard.summary.reclaimableJSHeap)} JS 堆。`
+    : "仅显示已经通过当前保护策略和闲置阈值检查的页面。";
   $("#candidates").className = dashboard.candidates.length ? "results" : "results empty-state";
   $("#candidates").innerHTML = dashboard.candidates.map(candidateRow).join("") || "目前没有可自动休眠的页面。";
 
@@ -177,6 +182,48 @@ $("#measure-resources").addEventListener("click", async () => {
     renderDiagnostics(result);
     setFeedback(result.reason, true);
   } finally {
+    button.disabled = false;
+  }
+});
+
+async function createLocalModel() {
+  const Model = globalThis.LanguageModel;
+  if (!Model?.availability || !Model?.create) throw new Error("当前 Chrome 未提供本地 AI 模型。");
+  const availability = await Model.availability();
+  if (!["available", "readily"].includes(availability)) {
+    throw new Error(availability === "downloadable" || availability === "downloading"
+      ? "浏览器正在准备本地模型，请稍后重试。"
+      : "当前浏览器或管理员策略未启用本地 AI 模型。");
+  }
+  return Model.create({ temperature: 0.2, topK: 3 });
+}
+
+$("#generate-ai-brief").addEventListener("click", async () => {
+  const button = $("#generate-ai-brief");
+  const output = $("#ai-brief");
+  button.disabled = true;
+  $("#ai-status").textContent = "生成中";
+  output.className = "ai-brief";
+  output.textContent = "正在通过本地模型整理网页元数据…";
+  let session;
+  try {
+    let answer;
+    if (dashboard.settings.aiProvider === "ollama") {
+      const result = await chrome.runtime.sendMessage({ type: "generateOllamaBrief", request: $("#ai-request").value });
+      if (!result?.ok) throw new Error(result?.reason || "Ollama 未能生成建议。");
+      answer = result.answer;
+    } else {
+      session = await createLocalModel();
+      answer = await session.prompt(buildLocalAiPrompt(dashboard.tabs, $("#ai-request").value));
+    }
+    output.textContent = answer.trim() || "本地模型没有返回可用建议。";
+    $("#ai-status").textContent = "已生成";
+  } catch (error) {
+    output.className = "ai-brief empty-state";
+    output.textContent = error.message || "无法生成本地 AI 建议。";
+    $("#ai-status").textContent = "不可用";
+  } finally {
+    session?.destroy?.();
     button.disabled = false;
   }
 });

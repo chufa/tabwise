@@ -10,7 +10,23 @@ const extensionPath = path.resolve(".");
 function startTestServer() {
   const hits = new Map();
   const server = createServer((request, response) => {
-    const page = new URL(request.url, "http://127.0.0.1").pathname.slice(1) || "home";
+    const url = new URL(request.url, "http://127.0.0.1");
+    if (url.pathname === "/api/tags") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ models: [{ name: "fixture:latest" }] }));
+      return;
+    }
+    if (url.pathname === "/api/generate") {
+      let body = "";
+      request.on("data", (chunk) => { body += chunk; });
+      request.on("end", () => {
+        const payload = JSON.parse(body);
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ response: `本地建议：已处理 ${payload.model}` }));
+      });
+      return;
+    }
+    const page = url.pathname.slice(1) || "home";
     hits.set(page, (hits.get(page) || 0) + 1);
     response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
     response.end(`<!doctype html><title>${page}</title><main><h1>${page}</h1><p>TabWise e2e fixture ${page}</p></main>`);
@@ -66,6 +82,7 @@ try {
   const extensionUrl = `chrome-extension://${extensionId}`;
   const control = await context.newPage();
   await control.goto(`${extensionUrl}/src/sidepanel/sidepanel.html`);
+  await control.getByRole("button", { name: "生成本地建议" }).waitFor();
 
   const alpha = await context.newPage();
   await alpha.goto(`${fixture.baseUrl}/alpha-research`);
@@ -83,6 +100,18 @@ try {
   assert.ok(alphaTab && reactTab, "fixture tabs must appear in the extension dashboard");
   assert.ok(alphaTab.memory?.usedJSHeapSize > 0, "dashboard should include the latest page heap snapshot");
   assert.ok(dashboard.summary.jsHeapUsage >= alphaTab.memory.usedJSHeapSize, "dashboard should include total JS heap usage");
+  await message(control, "updateSettings", {
+    settings: {
+      aiProvider: "ollama",
+      ollamaEndpoint: fixture.baseUrl,
+      ollamaModel: "fixture:latest"
+    }
+  });
+  const ollamaConnection = await message(control, "testOllamaConnection");
+  assert.equal(ollamaConnection.ok, true, "local Ollama connection should be testable");
+  await control.reload();
+  await control.getByRole("button", { name: "生成本地建议" }).click();
+  await control.getByText("本地建议：已处理 fixture:latest").waitFor();
   const popup = await context.newPage();
   await popup.goto(`${extensionUrl}/src/popup/popup.html`);
   await popup.locator("#tabs .row-main span").filter({ hasText: "JS 堆" }).first().waitFor();
@@ -115,6 +144,14 @@ try {
   assert.equal(checkpoint.ok, true, "creating a recovery checkpoint should succeed");
   assert.ok(checkpoint.count >= 3, "checkpoint should contain fixture pages");
 
+  const workspace = await message(control, "saveWorkspace", { name: "E2E workspace" });
+  const archived = await message(control, "toggleWorkspaceArchived", { workspaceId: workspace.id });
+  assert.equal(archived.archived, true, "workspace should be archivable without closing tabs");
+  const reopened = await message(control, "openWorkspace", { workspaceId: workspace.id });
+  assert.equal(reopened.ok, true, "archived workspace should reopen safely");
+  const restoredWorkspace = (await message(control, "getWorkspaces")).find((item) => item.id === workspace.id);
+  assert.equal(restoredWorkspace.archived, false, "opening an archived workspace should resume it");
+
   const grouped = await message(control, "groupTabs", { title: "E2E fixture", tabIds: [alphaTab.id, reactTab.id] });
   assert.equal(grouped.ok, true, "same-window fixture pages should group");
   assert.equal(grouped.count, 2, "grouping should include both requested tabs");
@@ -125,6 +162,11 @@ try {
   const settings = context.pages().find((page) => page.url().endsWith("/src/options/options.html"));
   assert.ok(settings, "side panel should open the settings page");
   await settings.getByLabel("扩展技术术语的本地关联").check();
+  await settings.getByRole("radio", { name: /Ollama/ }).check();
+  await settings.getByLabel("Ollama 地址").fill(fixture.baseUrl);
+  await settings.getByLabel("模型名").fill("fixture:latest");
+  await settings.getByRole("button", { name: "测试连接" }).click();
+  await settings.getByText("已连接，发现 1 个模型").waitFor();
   await settings.getByRole("button", { name: "保存设置" }).click();
 
   const nativeFixture = await context.newPage();

@@ -55,6 +55,22 @@
           </label>
         </section>
         <section class="setting-group">
+          <h2>本地 AI 提供方</h2>
+          <label class="mode-option" for="ai-provider-browser">
+            <input id="ai-provider-browser" name="ai-provider" type="radio" value="browser">
+            <span><strong>浏览器内置模型</strong><small>使用 Chrome 支持的本地模型，不需要额外服务。</small></span>
+          </label>
+          <label class="mode-option" for="ai-provider-ollama">
+            <input id="ai-provider-ollama" name="ai-provider" type="radio" value="ollama">
+            <span><strong>Ollama</strong><small>仅连接本机 loopback 地址，不上传页面正文或完整网址。</small></span>
+          </label>
+          <div id="ollama-config" class="ollama-config" hidden>
+            <label class="field-label" for="ollama-endpoint"><span>Ollama 地址</span><input id="ollama-endpoint" inputmode="url" maxlength="120" placeholder="http://127.0.0.1:11434"></label>
+            <label class="field-label" for="ollama-model"><span>模型名</span><input id="ollama-model" maxlength="120" placeholder="例如：qwen3:8b"></label>
+            <div class="connection-row"><button id="test-ollama" type="button">测试连接</button><span id="ollama-feedback" role="status"></span></div>
+          </div>
+        </section>
+        <section class="setting-group">
           <h2>可信网站</h2>
           <p class="section-copy">每行一个域名。保守模式下，只有这些网站会自动休眠；智能保护模式下，此列表不再限制自动休眠。</p>
           <label class="visually-hidden" for="trusted-domains">可信网站域名</label>

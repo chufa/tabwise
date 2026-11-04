@@ -12,6 +12,12 @@ const keys = Object.freeze({
   workspaces: "workspaces"
 });
 
+function sortWorkspaces(workspaces) {
+  workspaces.sort((left, right) => Number(Boolean(left.archived)) - Number(Boolean(right.archived))
+    || Number(Boolean(right.pinned)) - Number(Boolean(left.pinned))
+    || Number(right.createdAt) - Number(left.createdAt));
+}
+
 export async function getSettings() {
   const { [keys.settings]: saved = {} } = await chrome.storage.local.get(keys.settings);
   return { ...DEFAULT_SETTINGS, ...saved };
@@ -114,7 +120,7 @@ export async function getWorkspaces() {
 export async function addWorkspace(workspace) {
   const workspaces = await getWorkspaces();
   workspaces.unshift(workspace);
-  workspaces.sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) || right.createdAt - left.createdAt);
+  sortWorkspaces(workspaces);
   await chrome.storage.local.set({ [keys.workspaces]: workspaces.slice(0, 20) });
 }
 
@@ -123,7 +129,7 @@ export async function updateWorkspace(workspaceId, update) {
   const index = workspaces.findIndex((workspace) => workspace.id === workspaceId);
   if (index === -1) return null;
   workspaces[index] = { ...workspaces[index], ...update };
-  workspaces.sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) || right.createdAt - left.createdAt);
+  sortWorkspaces(workspaces);
   await chrome.storage.local.set({ [keys.workspaces]: workspaces });
   return workspaces.find((workspace) => workspace.id === workspaceId);
 }

@@ -26,8 +26,9 @@ h2 { color: #183142; font-size: 15px; font-weight: 780; letter-spacing: 0; }
 .switch-row input { width: 20px; height: 20px; flex: 0 0 auto; }
 .field-label { display: grid; gap: 8px; margin-top: 22px; color: #274b5d; font-size: 13px; font-weight: 760; }
 .number-field { display: flex; align-items: center; gap: 8px; color: #607681; font-size: 13px; font-weight: 400; }
-input[type="number"], textarea { border: 1px solid #b9ccd2; border-radius: 7px; background: #fff; color: inherit; font: inherit; }
+input[type="number"], input[type="text"], input[type="url"], textarea { border: 1px solid #b9ccd2; border-radius: 7px; background: #fff; color: inherit; font: inherit; }
 input[type="number"] { width: 112px; padding: 9px 10px; }
+input[type="text"], input[type="url"] { width: min(460px, 100%); padding: 9px 10px; }
 textarea { width: 100%; padding: 10px; resize: vertical; font-size: 13px; line-height: 1.5; }
 button { border: 1px solid #087b70; border-radius: 7px; padding: 10px 15px; background: #087b70; color: #fff; font: inherit; font-size: 13px; font-weight: 760; cursor: pointer; transition: background .16s ease-out, transform .16s ease-out; }
 button:hover { border-color: #05655d; background: #05655d; transform: translateY(-1px); }
@@ -37,6 +38,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 .privacy-note, .backup-note { margin-top: 30px; padding: 24px 0 0; border-top: 1px solid #d5e1e5; }
 .privacy-note p, .backup-note p { max-width: 66ch; margin-top: 8px; color: #607681; font-size: 13px; line-height: 1.6; }
 .backup-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.connection-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+.connection-row span { color: #087268; font-size: 13px; }
 .import-button { display: inline-flex; align-items: center; border: 1px solid #b9ccd2; border-radius: 7px; padding: 10px 15px; background: #fff; color: #12655f; font-size: 13px; font-weight: 760; cursor: pointer; }
 .import-button:hover { border-color: #63a99f; background: #effaf7; }
 .import-button input { position: absolute; width: 1px; height: 1px; opacity: 0; }
@@ -54,7 +57,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
   .page-header, .setting-group, .privacy-note, .backup-note, .mode-option + .mode-option { border-color: #314854; }
   header p, .section-copy, .switch-row small, .mode-option small, .number-field, .privacy-note p, .backup-note p { color: #a8bdc7; }
   .mode-option:hover { background: #193540; }
-  input[type="number"], textarea, .import-button { border-color: #3d5661; background: #172b37; color: #e8f1f4; }
+  input[type="number"], input[type="text"], input[type="url"], textarea, .import-button { border-color: #3d5661; background: #172b37; color: #e8f1f4; }
+  .connection-row span { color: #8edfd1; }
   .import-button { color: #8edfd1; }
   .import-button:hover { border-color: #5e9a92; background: #213d47; }
 }

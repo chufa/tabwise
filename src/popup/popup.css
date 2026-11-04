@@ -73,7 +73,7 @@ button:disabled { opacity: .52; cursor: default; transform: none; }
 .workspace-form .secondary-button { padding: 8px 10px; }
 .workspace-search-field { display: block; margin-bottom: 9px; }
 .workspace-search-field input { padding: 8px 9px; font-size: 12px; }
-.row-actions { flex: 0 0 auto; gap: 4px; }
+.row-actions { flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
 .suggestion-details { display: grid; gap: 5px; padding: 0 4px 5px 12px; }
 .suggestion-tab { min-width: 0; display: grid; gap: 3px; border: 1px solid #cce0df; border-radius: 6px; padding: 7px 9px; background: #eef8f6; color: #17685f; text-align: left; }
 .suggestion-tab:hover { background: #e0f3ef; }
