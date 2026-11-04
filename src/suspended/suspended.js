@@ -7,6 +7,7 @@ const timing = document.querySelector("#timing");
 const suspendedAt = document.querySelector("#suspended-at");
 const suspendedFor = document.querySelector("#suspended-for");
 let restoring = false;
+let timingInterval;
 
 function formatDuration(startedAt) {
   const minutes = Math.max(0, Math.floor((Date.now() - startedAt) / 60_000));
@@ -21,6 +22,12 @@ function renderTiming(startedAt) {
   suspendedAt.textContent = new Date(startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   suspendedFor.textContent = formatDuration(startedAt);
   timing.hidden = false;
+}
+
+function syncTimingInterval(startedAt) {
+  clearInterval(timingInterval);
+  if (document.visibilityState !== "visible") return;
+  timingInterval = setInterval(() => renderTiming(startedAt), 60_000);
 }
 
 async function restore() {
@@ -46,7 +53,11 @@ async function initialize() {
     const domain = new URL(record.originalUrl).hostname;
     detail.textContent = `${domain} 已休眠。原始页面已卸载，恢复前不会占用其渲染资源。`;
     renderTiming(record.suspendedAt);
-    setInterval(() => renderTiming(record.suspendedAt), 60_000);
+    document.addEventListener("visibilitychange", () => {
+      renderTiming(record.suspendedAt);
+      syncTimingInterval(record.suspendedAt);
+    });
+    syncTimingInterval(record.suspendedAt);
   }
   const wasReloaded = performance.getEntriesByType("navigation")[0]?.type === "reload";
   if (wasReloaded && recordId) await restore();

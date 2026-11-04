@@ -37,6 +37,11 @@ export function isExpectedSuspensionUrl(url, extensionOrigin, recordId) {
   return url === `${extensionOrigin}/${SUSPENDED_PAGE}#${recordId}`;
 }
 
+export function isIdleLongEnough(activity, tabId, thresholdMs, now = Date.now()) {
+  const lastActive = activity?.[tabId];
+  return Boolean(lastActive && now - lastActive >= thresholdMs);
+}
+
 export function suspensionBlockReason(tab, settings, extensionOrigin) {
   if (!tab?.id) return "Tab is unavailable";
   if (tab.active) return "Active tab";

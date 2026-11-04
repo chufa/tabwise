@@ -47,6 +47,34 @@ function candidateRow(candidate) {
   </article>`;
 }
 
+function formatMemory(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "未知";
+  return `${Math.round(bytes / 1024 / 1024)} MB`;
+}
+
+function rendererRow(renderer) {
+  const pages = renderer.tabs.map((tab) => tab.title).join("、");
+  const sharing = renderer.tabCount > 1 ? `${renderer.tabCount} 个网页共享` : "1 个网页";
+  return `<article class="result">
+    <div class="result-copy">
+      <strong title="${escapeHtml(pages)}">${escapeHtml(pages)}</strong>
+      <span>Renderer ${renderer.processId} · ${sharing} · JS ${formatMemory(renderer.jsMemoryUsed)}</span>
+    </div>
+    <span class="resource-value">${formatMemory(renderer.privateMemory)}</span>
+  </article>`;
+}
+
+function renderDiagnostics(result) {
+  const container = $("#renderer-diagnostics");
+  if (!result?.ok) {
+    container.className = "results empty-state";
+    container.textContent = result?.reason || "浏览器未提供 Renderer 内存数据。";
+    return;
+  }
+  container.className = result.renderers.length ? "results" : "results empty-state";
+  container.innerHTML = result.renderers.map(rendererRow).join("") || "没有可测量的网页 Renderer。";
+}
+
 async function loadDashboard() {
   dashboard = await chrome.runtime.sendMessage({ type: "getDashboard" });
   const { summary, settings } = dashboard;
@@ -127,6 +155,27 @@ $("#save-checkpoint").addEventListener("click", async () => {
   const result = await chrome.runtime.sendMessage({ type: "createRecoveryCheckpoint" });
   setFeedback(result?.ok ? `已保存 ${result.count} 个页面` : result?.reason, !result?.ok);
   await loadDashboard();
+});
+$("#measure-resources").addEventListener("click", async () => {
+  const button = $("#measure-resources");
+  button.disabled = true;
+  try {
+    let result = await chrome.runtime.sendMessage({ type: "getResourceDiagnostics" });
+    if (result.permissionRequired) {
+      const granted = await chrome.permissions.request({ permissions: ["processes"] });
+      result = granted
+        ? await chrome.runtime.sendMessage({ type: "getResourceDiagnostics" })
+        : { ok: false, reason: "未授予资源诊断权限。" };
+    }
+    renderDiagnostics(result);
+    setFeedback(result.ok ? "已采集一次 Renderer 内存快照" : result.reason, !result.ok);
+  } catch {
+    const result = { ok: false, reason: "当前浏览器不支持 Renderer 内存诊断。" };
+    renderDiagnostics(result);
+    setFeedback(result.reason, true);
+  } finally {
+    button.disabled = false;
+  }
 });
 $("#settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
 

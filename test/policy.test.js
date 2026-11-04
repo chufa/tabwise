@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { escapeHtml } from "../src/shared/html.js";
-import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isSuspendableUrl, isSuspendedUrl, matchesDomain, planLocalOrganization, smartSuspensionBlockReason, suspensionBlockReason } from "../src/shared/policy.js";
+import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isIdleLongEnough, isSuspendableUrl, isSuspendedUrl, matchesDomain, planLocalOrganization, smartSuspensionBlockReason, suspensionBlockReason } from "../src/shared/policy.js";
 
 const settings = { trustedDomains: ["example.com"], blockedDomains: ["mail.example.com"] };
 const origin = "chrome-extension://extension-id";
@@ -50,6 +50,13 @@ test("groups local domains and finds exact URL duplicates", () => {
   assert.deepEqual(plan.domainGroups, [{ domain: "docs.example.com", tabIds: [1, 2] }, { domain: "other.com", tabIds: [3, 4] }]);
   assert.deepEqual(plan.duplicates, [{ url: "https://other.com/a", tabIds: [3, 4] }]);
   assert.equal(domainForUrl("data:text/plain,test"), "");
+});
+
+test("uses one activity snapshot to decide whether a tab is idle long enough", () => {
+  const activity = { 1: 1_000, 2: 2_900 };
+  assert.equal(isIdleLongEnough(activity, 1, 1_000, 2_000), true);
+  assert.equal(isIdleLongEnough(activity, 2, 1_000, 2_000), false);
+  assert.equal(isIdleLongEnough(activity, 3, 1_000, 2_000), false);
 });
 
 test("escapes tab metadata before inserting popup HTML", () => {

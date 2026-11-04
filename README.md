@@ -27,6 +27,10 @@ Enable "本地关联搜索" in Settings to expand a small built-in set of techni
 
 Use `tw <keywords>` in Chrome's address bar to search. The first result can be opened with Enter; side panel search shows all matching sources and always uses the normal restore flow.
 
+## Experimental renderer diagnostics
+
+Chrome Dev and Canary users can open the Side Panel and choose `测量一次` under resource diagnostics. TabWise requests the optional `processes` permission only after that action, then takes a single Renderer memory snapshot. Renderer processes can be shared by several tabs, so memory is displayed once per Renderer with its related tabs, not as exact per-tab memory. Stable Chrome and Edge will clearly report that this API is unavailable.
+
 ## Suspension modes
 
 - **保守模式（默认）**：只自动休眠“可信网站”列表中的页面，适合对数据安全要求高的场景。

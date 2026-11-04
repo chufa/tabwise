@@ -1,7 +1,8 @@
 import { ALARM_NAME, ALARM_PERIOD_MINUTES, CHECKPOINT_ALARM_NAME, CHECKPOINT_PERIOD_MINUTES, SUSPENDED_PAGE, SUSPENSION_MODES, SUSPENSION_STATES, SUSPENSION_STRATEGIES } from "../shared/constants.js";
-import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isSuspendableUrl, isSuspendedUrl, normalizeDomain, planLocalOrganization, smartSuspensionBlockReason, suspensionBlockReason } from "../shared/policy.js";
+import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isIdleLongEnough, isSuspendableUrl, isSuspendedUrl, normalizeDomain, planLocalOrganization, smartSuspensionBlockReason, suspensionBlockReason } from "../shared/policy.js";
 import { addRecentSuspension, addRecoveryCheckpoint, addWorkspace, getActivity, getObservedAt, getRecentSuspensions, getRecord, getRecords, getRecoveryCheckpoints, getSettings, getWorkspaces, putRecord, removeActivity, removePrimaryRecord, removeRecentSuspension, removeRecord, removeRecordsForTab, saveSettings, touchTab, updateWorkspace } from "../shared/storage.js";
 import { buildSuspendCandidate, searchPageMemory } from "../shared/search.js";
+import { buildRendererDiagnostics } from "../shared/resource.js";
 
 const extensionOrigin = chrome.runtime.getURL("").replace(/\/$/, "");
 const tabQueues = new Map();
@@ -126,12 +127,6 @@ async function rebindSuspendedTabs() {
   }));
 }
 
-async function isIdleEnough(tabId, thresholdMs) {
-  const activity = await getActivity();
-  const lastActive = activity[tabId];
-  return Boolean(lastActive && Date.now() - lastActive >= thresholdMs);
-}
-
 async function suspendTab(tabId, reason = "manual", allowProtected = false) {
   return runForTab(tabId, async () => {
     let recordId;
@@ -222,13 +217,14 @@ async function processIdleTabs() {
 
   const tabs = await chrome.tabs.query({});
   const protectionStates = settings.suspensionMode === SUSPENSION_MODES.SMART ? await getProtectionStates() : {};
+  const activity = await getActivity();
   const thresholdMs = settings.idleMinutes * 60_000;
   for (const tab of tabs.slice(0, 50)) {
     const blockReason = settings.suspensionMode === SUSPENSION_MODES.SMART
       ? smartSuspensionBlockReason(tab, settings, extensionOrigin, protectionStates[tab.id])
       : suspensionBlockReason(tab, settings, extensionOrigin);
     if (!tab.id || blockReason) continue;
-    if (await isIdleEnough(tab.id, thresholdMs)) await suspendTab(tab.id, "idle");
+    if (isIdleLongEnough(activity, tab.id, thresholdMs)) await suspendTab(tab.id, "idle");
   }
 }
 
@@ -402,6 +398,26 @@ async function openSearchResult(result) {
   return { ok: false, reason: "暂不支持打开该搜索结果" };
 }
 
+async function getResourceDiagnostics() {
+  if (!chrome.processes?.getProcessIdForTab || !chrome.processes?.getProcessInfo) {
+    return { ok: false, supported: false, reason: "资源诊断仅支持 Chrome Dev 或 Canary。" };
+  }
+  const granted = await chrome.permissions.contains({ permissions: ["processes"] });
+  if (!granted) return { ok: false, supported: true, permissionRequired: true };
+
+  const tabs = (await chrome.tabs.query({})).filter((tab) => tab.id && isSuspendableUrl(tab.url) && !tab.discarded);
+  const entries = await Promise.all(tabs.map(async (tab) => [tab, await chrome.processes.getProcessIdForTab(tab.id).catch(() => null)]));
+  const processIdByTab = new Map(entries.filter(([, processId]) => Number.isInteger(processId)).map(([tab, processId]) => [tab.id, processId]));
+  const processIds = [...new Set(processIdByTab.values())];
+  if (!processIds.length) return { ok: true, measuredAt: Date.now(), renderers: [] };
+  const processInfo = await chrome.processes.getProcessInfo(processIds, true);
+  return {
+    ok: true,
+    measuredAt: Date.now(),
+    renderers: buildRendererDiagnostics(tabs, processIdByTab, processInfo)
+  };
+}
+
 async function getSuspendedRecordForSender(recordId, sender) {
   const record = await getRecord(recordId);
   const expected = `${chrome.runtime.getURL(SUSPENDED_PAGE)}#${recordId}`;
@@ -558,6 +574,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tasks = {
     getDashboard,
+    getResourceDiagnostics,
     searchPages: () => searchPages(message.query, message.limit),
     openSearchResult: () => openSearchResult(message.result),
     getSuspendedRecord: () => getSuspendedRecordForSender(message.recordId, sender),

@@ -66,6 +66,8 @@ try {
   const extensionUrl = `chrome-extension://${extensionId}`;
   const control = await context.newPage();
   await control.goto(`${extensionUrl}/src/sidepanel/sidepanel.html`);
+  await control.getByRole("button", { name: "测量一次" }).click();
+  await control.locator("#renderer-diagnostics").getByText("资源诊断仅支持 Chrome Dev 或 Canary。").waitFor();
 
   const alpha = await context.newPage();
   await alpha.goto(`${fixture.baseUrl}/alpha-research`);
