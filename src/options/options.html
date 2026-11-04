@@ -37,6 +37,25 @@
           </label>
         </section>
         <section class="setting-group">
+          <h2>定时资源巡检</h2>
+          <label class="switch-row" for="scheduled-review-enabled">
+            <span><strong>每天保存恢复点并巡检资源</strong><small>仅更新本地资源快照、保存恢复点和记录可回收建议；不会自动休眠、关闭或打开页面。</small></span>
+            <input id="scheduled-review-enabled" type="checkbox">
+          </label>
+          <label class="field-label" for="scheduled-review-time">
+            <span>运行时间</span>
+            <input id="scheduled-review-time" type="time" required>
+          </label>
+          <label class="switch-row" for="scheduled-archive-enabled">
+            <span><strong>归档长期未打开的工作区</strong><small>仅归档未固定的保存工作区，不会关闭任何标签；可在工作区列表中恢复。</small></span>
+            <input id="scheduled-archive-enabled" type="checkbox">
+          </label>
+          <label class="field-label" for="scheduled-archive-days">
+            <span>归档阈值</span>
+            <div class="number-field"><input id="scheduled-archive-days" type="number" min="7" max="365" required><span>天未打开</span></div>
+          </label>
+        </section>
+        <section class="setting-group">
           <h2>节能方式</h2>
           <label class="mode-option" for="strategy-placeholder">
             <input id="strategy-placeholder" name="suspension-strategy" type="radio" value="placeholder">

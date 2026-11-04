@@ -6,6 +6,7 @@ const keys = Object.freeze({
   restoreRecords: "suspensionRestoreRecords",
   recentSuspensions: "recentSuspensions",
   recoveryCheckpoints: "recoveryCheckpoints",
+  resourceReviews: "resourceReviews",
   resourceSnapshots: "resourceSnapshots",
   activity: "lastActivity",
   observedAt: "firstObservedAt",
@@ -163,5 +164,17 @@ export async function addRecoveryCheckpoint(checkpoint) {
   if (duplicate) return checkpoints;
   const next = [checkpoint, ...checkpoints].slice(0, 10);
   await chrome.storage.local.set({ [keys.recoveryCheckpoints]: next });
+  return next;
+}
+
+export async function getResourceReviews() {
+  const { [keys.resourceReviews]: reviews = [] } = await chrome.storage.local.get(keys.resourceReviews);
+  return reviews;
+}
+
+export async function addResourceReview(review) {
+  const reviews = await getResourceReviews();
+  const next = [review, ...reviews].slice(0, 20);
+  await chrome.storage.local.set({ [keys.resourceReviews]: next });
   return next;
 }

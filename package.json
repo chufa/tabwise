@@ -6,7 +6,7 @@
   "scripts": {
     "test": "node --test test/*.test.js",
     "test:e2e": "node test/extension.e2e.mjs",
-    "check": "node --check src/background/service-worker.js && node --check src/content/protection.js && node --check src/shared/policy.js && node --check src/shared/resource.js && node --check src/shared/insights.js && node --check src/shared/ollama.js && node --check src/shared/search.js && node --check src/shared/storage.js && node --check src/shared/html.js && node --check src/popup/popup.js && node --check src/options/options.js && node --check src/sidepanel/sidepanel.js && node --check src/suspended/suspended.js"
+    "check": "node --check src/background/service-worker.js && node --check src/content/protection.js && node --check src/shared/policy.js && node --check src/shared/resource.js && node --check src/shared/insights.js && node --check src/shared/ollama.js && node --check src/shared/review.js && node --check src/shared/search.js && node --check src/shared/storage.js && node --check src/shared/html.js && node --check src/popup/popup.js && node --check src/options/options.js && node --check src/sidepanel/sidepanel.js && node --check src/suspended/suspended.js"
   },
   "devDependencies": {
     "playwright": "^1.64.1"

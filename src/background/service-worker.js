@@ -1,10 +1,11 @@
-import { ALARM_NAME, ALARM_PERIOD_MINUTES, CHECKPOINT_ALARM_NAME, CHECKPOINT_PERIOD_MINUTES, SUSPENDED_PAGE, SUSPENSION_MODES, SUSPENSION_STATES, SUSPENSION_STRATEGIES } from "../shared/constants.js";
+import { ALARM_NAME, ALARM_PERIOD_MINUTES, CHECKPOINT_ALARM_NAME, CHECKPOINT_PERIOD_MINUTES, RESOURCE_REVIEW_ALARM_NAME, SUSPENDED_PAGE, SUSPENSION_MODES, SUSPENSION_STATES, SUSPENSION_STRATEGIES } from "../shared/constants.js";
 import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isIdleLongEnough, isSuspendableUrl, isSuspendedUrl, normalizeDomain, planLocalOrganization, smartSuspensionBlockReason, suspensionBlockReason } from "../shared/policy.js";
-import { addRecentSuspension, addRecoveryCheckpoint, addWorkspace, getActivity, getObservedAt, getRecentSuspensions, getRecord, getRecords, getRecoveryCheckpoints, getResourceSnapshots, getSettings, getWorkspaces, putRecord, removeActivity, removePrimaryRecord, removeRecentSuspension, removeRecord, removeRecordsForTab, removeResourceSnapshot, saveResourceSnapshots, saveSettings, touchTab, updateWorkspace } from "../shared/storage.js";
+import { addRecentSuspension, addRecoveryCheckpoint, addResourceReview, addWorkspace, getActivity, getObservedAt, getRecentSuspensions, getRecord, getRecords, getRecoveryCheckpoints, getResourceReviews, getResourceSnapshots, getSettings, getWorkspaces, putRecord, removeActivity, removePrimaryRecord, removeRecentSuspension, removeRecord, removeRecordsForTab, removeResourceSnapshot, saveResourceSnapshots, saveSettings, touchTab, updateWorkspace } from "../shared/storage.js";
 import { buildSuspendCandidate, searchPageMemory } from "../shared/search.js";
 import { buildHeapDiagnostics, buildRendererDiagnostics, summarizeHeapSnapshots } from "../shared/resource.js";
 import { buildLocalAiPrompt, buildResourceReclaimPlan } from "../shared/insights.js";
 import { buildOllamaRequest, normalizeOllamaEndpoint, normalizeOllamaModel } from "../shared/ollama.js";
+import { buildResourceReview, findStaleWorkspaces, nextReviewAt } from "../shared/review.js";
 
 const extensionOrigin = chrome.runtime.getURL("").replace(/\/$/, "");
 const tabQueues = new Map();
@@ -48,6 +49,14 @@ function sanitizeSettings(current, update) {
     ollamaModel: typeof update.ollamaModel === "string"
       ? normalizeOllamaModel(update.ollamaModel, current.ollamaModel)
       : current.ollamaModel,
+    scheduledReviewEnabled: typeof update.scheduledReviewEnabled === "boolean" ? update.scheduledReviewEnabled : current.scheduledReviewEnabled,
+    scheduledReviewHour: Number.isFinite(Number(update.scheduledReviewHour))
+      ? Math.min(23, Math.max(0, Math.round(Number(update.scheduledReviewHour))))
+      : current.scheduledReviewHour,
+    scheduledArchiveEnabled: typeof update.scheduledArchiveEnabled === "boolean" ? update.scheduledArchiveEnabled : current.scheduledArchiveEnabled,
+    scheduledArchiveDays: Number.isFinite(Number(update.scheduledArchiveDays))
+      ? Math.min(365, Math.max(7, Math.round(Number(update.scheduledArchiveDays))))
+      : current.scheduledArchiveDays,
     resourceSampling: typeof update.resourceSampling === "boolean" ? update.resourceSampling : current.resourceSampling,
     trustedDomains: Array.isArray(update.trustedDomains) ? normalizeList(update.trustedDomains) : current.trustedDomains,
     blockedDomains: Array.isArray(update.blockedDomains) ? normalizeList(update.blockedDomains) : current.blockedDomains,
@@ -115,6 +124,16 @@ async function ensureAlarm() {
 async function ensureCheckpointAlarm() {
   const alarm = await chrome.alarms.get(CHECKPOINT_ALARM_NAME);
   if (!alarm) await chrome.alarms.create(CHECKPOINT_ALARM_NAME, { periodInMinutes: CHECKPOINT_PERIOD_MINUTES });
+}
+
+async function scheduleResourceReview() {
+  const settings = await getSettings();
+  await chrome.alarms.clear(RESOURCE_REVIEW_ALARM_NAME);
+  if (!settings.scheduledReviewEnabled) return;
+  await chrome.alarms.create(RESOURCE_REVIEW_ALARM_NAME, {
+    when: nextReviewAt(settings.scheduledReviewHour),
+    periodInMinutes: 24 * 60
+  });
 }
 
 async function recordExistingTabs() {
@@ -252,6 +271,25 @@ async function createRecoveryCheckpoint() {
     tabs: checkpointTabs
   });
   return { ok: true, count: checkpointTabs.length, checkpoints: checkpoints.length };
+}
+
+async function runResourceReview(trigger = "manual") {
+  const settings = await getSettings();
+  await refreshResourceSnapshots(true);
+  const checkpoint = await createRecoveryCheckpoint();
+  let archivedWorkspaceCount = 0;
+  if (trigger === "scheduled" && settings.scheduledArchiveEnabled) {
+    const staleWorkspaces = findStaleWorkspaces(await getWorkspaces(), Date.now(), settings.scheduledArchiveDays);
+    for (const workspace of staleWorkspaces) {
+      await updateWorkspace(workspace.id, { archived: true, archivedAt: Date.now(), autoArchived: true });
+      archivedWorkspaceCount += 1;
+    }
+  }
+  const dashboard = await getDashboard();
+  const duplicateCount = dashboard.organization.duplicates.reduce((total, group) => total + group.tabIds.length - 1, 0);
+  const review = buildResourceReview(dashboard, checkpoint, trigger, Date.now(), { duplicateCount, archivedWorkspaceCount });
+  await addResourceReview(review);
+  return { ok: true, review };
 }
 
 async function restoreRecentSuspension(recordId) {
@@ -617,6 +655,7 @@ async function importBackup(backup) {
 chrome.runtime.onInstalled.addListener(async () => {
   await ensureAlarm();
   await ensureCheckpointAlarm();
+  await scheduleResourceReview();
   await recordExistingTabs();
   await refreshResourceSnapshots(true);
   await chrome.omnibox.setDefaultSuggestion({ description: "搜索 TabWise 本地页面记忆" });
@@ -628,6 +667,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 chrome.runtime.onStartup.addListener(async () => {
   await ensureAlarm();
   await ensureCheckpointAlarm();
+  await scheduleResourceReview();
   await rebindSuspendedTabs();
   await refreshResourceSnapshots(true);
   if ((await getSettings()).suspensionMode === SUSPENSION_MODES.SMART) {
@@ -674,6 +714,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     })().catch(console.error);
   }
   if (alarm.name === CHECKPOINT_ALARM_NAME) createRecoveryCheckpoint().catch(console.error);
+  if (alarm.name === RESOURCE_REVIEW_ALARM_NAME) runResourceReview("scheduled").catch(console.error);
 });
 chrome.tabs.onActivated.addListener(({ tabId }) => touchTab(tabId));
 chrome.tabs.onRemoved.addListener(async (tabId) => {
@@ -716,6 +757,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const current = await getSettings();
       const next = sanitizeSettings(current, message.settings || {});
       await saveSettings(next);
+      await scheduleResourceReview();
       return next;
     },
     setSuspensionMode: () => setSuspensionMode(message.mode),
@@ -739,7 +781,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     getWorkspaces,
     getRecentSuspensions,
     getRecoveryCheckpoints,
+    getResourceReviews,
     createRecoveryCheckpoint,
+    runResourceReview: () => runResourceReview("manual"),
     restoreRecentSuspension: () => restoreRecentSuspension(message.recordId),
     restoreCheckpoint: () => restoreCheckpoint(message.checkpointId),
     exportBackup: async () => ({

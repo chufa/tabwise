@@ -143,6 +143,10 @@ try {
   const checkpoint = await message(control, "createRecoveryCheckpoint");
   assert.equal(checkpoint.ok, true, "creating a recovery checkpoint should succeed");
   assert.ok(checkpoint.count >= 3, "checkpoint should contain fixture pages");
+  const review = await message(control, "runResourceReview");
+  assert.equal(review.ok, true, "manual resource review should complete safely");
+  assert.ok(review.review.checkpointTabCount >= 3, "resource review should save a recovery checkpoint");
+  assert.equal((await message(control, "getResourceReviews"))[0].trigger, "manual", "resource review should retain an audit entry");
 
   const workspace = await message(control, "saveWorkspace", { name: "E2E workspace" });
   const archived = await message(control, "toggleWorkspaceArchived", { workspaceId: workspace.id });
@@ -158,10 +162,15 @@ try {
 
   await control.getByLabel("查找页面").fill("react perf");
   await control.getByText("react-performance", { exact: false }).first().waitFor();
+  const settingsPage = context.waitForEvent("page");
   await control.getByRole("button", { name: "设置" }).click();
-  const settings = context.pages().find((page) => page.url().endsWith("/src/options/options.html"));
-  assert.ok(settings, "side panel should open the settings page");
+  const settings = await settingsPage;
+  await settings.waitForURL(/\/src\/options\/options\.html$/);
   await settings.getByLabel("扩展技术术语的本地关联").check();
+  await settings.getByLabel("每天保存恢复点并巡检资源").check();
+  await settings.getByLabel("运行时间").fill("18:00");
+  await settings.getByLabel("归档长期未打开的工作区").check();
+  await settings.getByLabel("归档阈值").fill("30");
   await settings.getByRole("radio", { name: /Ollama/ }).check();
   await settings.getByLabel("Ollama 地址").fill(fixture.baseUrl);
   await settings.getByLabel("模型名").fill("fixture:latest");

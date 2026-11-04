@@ -2,6 +2,7 @@ export const ALARM_NAME = "tabwise-idle-check";
 export const ALARM_PERIOD_MINUTES = 1;
 export const CHECKPOINT_ALARM_NAME = "tabwise-checkpoint";
 export const CHECKPOINT_PERIOD_MINUTES = 30;
+export const RESOURCE_REVIEW_ALARM_NAME = "tabwise-resource-review";
 export const SUSPENDED_PAGE = "src/suspended/suspended.html";
 export const SCHEMA_VERSION = 1;
 export const DEFAULT_SETTINGS = Object.freeze({
@@ -13,6 +14,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
   aiProvider: "browser",
   ollamaEndpoint: "http://127.0.0.1:11434",
   ollamaModel: "",
+  scheduledReviewEnabled: false,
+  scheduledReviewHour: 18,
+  scheduledArchiveEnabled: false,
+  scheduledArchiveDays: 30,
   resourceSampling: true,
   trustedDomains: [],
   blockedDomains: [],

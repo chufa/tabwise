@@ -8,6 +8,10 @@ async function load() {
   const settings = await chrome.runtime.sendMessage({ type: "getDashboard" }).then((data) => data.settings);
   $("#idle-minutes").value = settings.idleMinutes;
   $("#auto-suspend").checked = settings.autoSuspend;
+  $("#scheduled-review-enabled").checked = settings.scheduledReviewEnabled;
+  $("#scheduled-review-time").value = `${String(settings.scheduledReviewHour ?? 18).padStart(2, "0")}:00`;
+  $("#scheduled-archive-enabled").checked = settings.scheduledArchiveEnabled;
+  $("#scheduled-archive-days").value = settings.scheduledArchiveDays ?? 30;
   $(`input[name="suspension-mode"][value="${settings.suspensionMode || "conservative"}"]`).checked = true;
   $(`input[name="suspension-strategy"][value="${settings.suspensionStrategy || "placeholder"}"]`).checked = true;
   $("#semantic-search").checked = settings.semanticSearch;
@@ -41,6 +45,10 @@ $("#settings-form").addEventListener("submit", async (event) => {
     settings: {
       idleMinutes: Number($("#idle-minutes").value),
       autoSuspend: $("#auto-suspend").checked,
+      scheduledReviewEnabled: $("#scheduled-review-enabled").checked,
+      scheduledReviewHour: Number($("#scheduled-review-time").value.split(":")[0]),
+      scheduledArchiveEnabled: $("#scheduled-archive-enabled").checked,
+      scheduledArchiveDays: Number($("#scheduled-archive-days").value),
       suspensionMode: mode,
       suspensionStrategy: strategy,
       semanticSearch: $("#semantic-search").checked,

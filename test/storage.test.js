@@ -27,8 +27,10 @@ globalThis.chrome = {
 const {
   addRecentSuspension,
   addRecoveryCheckpoint,
+  addResourceReview,
   addWorkspace,
   getRecentSuspensions,
+  getResourceReviews,
   getRecoveryCheckpoints,
   getResourceSnapshots,
   getRecord,
@@ -111,4 +113,14 @@ test("keeps archived workspaces available for later resumption", async () => {
 
   assert.equal(archived.archived, true);
   assert.equal((await getWorkspaces()).find((workspace) => workspace.id === "workspace-archive").archivedAt, 2);
+});
+
+test("retains the 20 latest resource review records", async () => {
+  for (let index = 0; index < 22; index += 1) {
+    await addResourceReview({ createdAt: index, trigger: "scheduled" });
+  }
+  const reviews = await getResourceReviews();
+  assert.equal(reviews.length, 20);
+  assert.equal(reviews[0].createdAt, 21);
+  assert.equal(reviews.at(-1).createdAt, 2);
 });

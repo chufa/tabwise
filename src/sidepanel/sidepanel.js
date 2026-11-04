@@ -70,6 +70,15 @@ function rendererRow(renderer) {
   </article>`;
 }
 
+function reviewRow(review) {
+  const memory = review.reclaimableMeasuredTabs ? `预计 ${formatMemory(review.reclaimableJSHeap)}` : "暂无内存估算";
+  const organization = [`${review.candidateCount} 项建议`, review.duplicateCount ? `${review.duplicateCount} 个重复页` : "", review.archivedWorkspaceCount ? `归档 ${review.archivedWorkspaceCount} 个工作区` : ""].filter(Boolean).join(" · ");
+  return `<article class="timeline-item">
+    <span class="timeline-kind">${review.trigger === "scheduled" ? "定时" : "手动"}</span>
+    <div><strong>${relativeTime(review.createdAt)}巡检</strong><span>${review.checkpointTabCount} 页恢复点 · ${organization} · ${memory}</span></div>
+  </article>`;
+}
+
 function renderDiagnostics(result) {
   const container = $("#renderer-diagnostics");
   if (!result?.ok) {
@@ -99,10 +108,16 @@ async function loadDashboard() {
   $("#candidates").className = dashboard.candidates.length ? "results" : "results empty-state";
   $("#candidates").innerHTML = dashboard.candidates.map(candidateRow).join("") || "目前没有可自动休眠的页面。";
 
-  const [recent, checkpoints] = await Promise.all([
+  const [recent, checkpoints, reviews] = await Promise.all([
     chrome.runtime.sendMessage({ type: "getRecentSuspensions" }),
-    chrome.runtime.sendMessage({ type: "getRecoveryCheckpoints" })
+    chrome.runtime.sendMessage({ type: "getRecoveryCheckpoints" }),
+    chrome.runtime.sendMessage({ type: "getResourceReviews" })
   ]);
+  $("#review-schedule").textContent = settings.scheduledReviewEnabled
+    ? `每天 ${String(settings.scheduledReviewHour).padStart(2, "0")}:00 保存恢复点并巡检资源${settings.scheduledArchiveEnabled ? `；${settings.scheduledArchiveDays} 天未打开的工作区将归档` : ""}；不会自动休眠页面。`
+    : "定时巡检已关闭；可随时手动运行，巡检不会自动休眠页面。";
+  $("#resource-reviews").className = reviews.length ? "timeline" : "timeline empty-state";
+  $("#resource-reviews").innerHTML = reviews.slice(0, 3).map(reviewRow).join("") || "暂无资源巡检记录。";
   const timeline = [
     ...recent.slice(0, 3).map((record) => ({
       kind: "休眠",
@@ -181,6 +196,18 @@ $("#measure-resources").addEventListener("click", async () => {
     const result = { ok: false, reason: "当前浏览器无法读取网页内存。" };
     renderDiagnostics(result);
     setFeedback(result.reason, true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$("#run-resource-review").addEventListener("click", async () => {
+  const button = $("#run-resource-review");
+  button.disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "runResourceReview" });
+    setFeedback(result?.ok ? `已完成巡检并保存 ${result.review.checkpointTabCount} 页恢复点` : result?.reason || "资源巡检未完成", !result?.ok);
+    await loadDashboard();
   } finally {
     button.disabled = false;
   }
