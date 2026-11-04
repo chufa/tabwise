@@ -15,7 +15,7 @@ TabWise 是一个本地优先的 Chrome/Edge 标签管理扩展。它会将符�
 - Side Panel 页面记忆：用标题、域名和 URL 路径模糊查找打开页、休眠页、工作区和恢复点
 - 地址栏搜索：输入 `tw` 后跟查询词；也可用 `Cmd/Ctrl+Shift+K` 打开侧栏
 - 可解释的休眠候选、两种节能策略，以及可选的本地关联术语搜索
-- 不调用外部 AI、不采集页面正文、无遥测和 host 权限
+- 不调用外部 AI、不采集页面正文或遥测；网页访问权限仅用于本地页面保护和 JS 堆内存采样
 
 智能整理层只使用本地标题和域名元数据。后续如接入模型，必须由用户显式启用，并只能生成待预览的建议。
 
@@ -29,7 +29,7 @@ Use `tw <keywords>` in Chrome's address bar to search. The first result can be o
 
 ## Page memory diagnostics
 
-Open the Side Panel and choose `测量一次` under resource diagnostics to view JavaScript heap memory for each open webpage on Chrome. TabWise requests website access only after that action, then refreshes session-only snapshots alongside its one-minute suspension check and shows the latest value directly in each tab row. Chrome Dev and Canary can additionally grant the optional `processes` permission to display shared Renderer private memory. Renderer processes can be shared by several tabs, so that metric is shown once per Renderer with its related tabs, not as exact per-tab memory.
+TabWise samples JavaScript heap memory for each open webpage at startup and alongside its one-minute suspension check, then shows the latest session-only value directly in each tab row. The Resource Diagnostics panel can force an immediate refresh. Chrome Dev and Canary can additionally grant the optional `processes` permission to display shared Renderer private memory. Renderer processes can be shared by several tabs, so that metric is shown once per Renderer with its related tabs, not as exact per-tab memory.
 
 ## Suspension modes
 

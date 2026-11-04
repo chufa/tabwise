@@ -86,7 +86,7 @@ async function loadDashboard() {
   $("#state").textContent = settings.autoSuspend
     ? `自动休眠开启 · ${settings.idleMinutes} 分钟阈值`
     : `${summary.unloaded} 个页面处于休眠`;
-  $("#measure-resources").textContent = settings.resourceSampling ? "立即更新" : "测量一次";
+  $("#measure-resources").textContent = "立即更新";
   $("#candidate-count").textContent = dashboard.candidates.length ? `${dashboard.candidates.length} 项` : "无";
   $("#candidates").className = dashboard.candidates.length ? "results" : "results empty-state";
   $("#candidates").innerHTML = dashboard.candidates.map(candidateRow).join("") || "目前没有可自动休眠的页面。";
@@ -166,15 +166,6 @@ $("#measure-resources").addEventListener("click", async () => {
   const button = $("#measure-resources");
   button.disabled = true;
   try {
-    const origins = ["http://*/*", "https://*/*"];
-    const hasAccess = await chrome.permissions.contains({ origins });
-    if (!hasAccess && !await chrome.permissions.request({ origins })) {
-      const result = { ok: false, reason: "未授予网页内存测量权限。" };
-      renderDiagnostics(result);
-      setFeedback(result.reason, true);
-      return;
-    }
-    await chrome.runtime.sendMessage({ type: "enableResourceSampling" });
     let result = await chrome.runtime.sendMessage({ type: "getResourceDiagnostics" });
     renderDiagnostics(result);
     setFeedback(result.ok ? "已采集一次网页内存快照" : result.reason, !result.ok);

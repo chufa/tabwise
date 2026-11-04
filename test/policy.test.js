@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { escapeHtml } from "../src/shared/html.js";
+import { DEFAULT_SETTINGS } from "../src/shared/constants.js";
 import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isIdleLongEnough, isSuspendableUrl, isSuspendedUrl, matchesDomain, planLocalOrganization, smartSuspensionBlockReason, suspensionBlockReason } from "../src/shared/policy.js";
 
 const settings = { trustedDomains: ["example.com"], blockedDomains: ["mail.example.com"] };
@@ -9,6 +10,10 @@ const origin = "chrome-extension://extension-id";
 test("matches root and subdomains", () => {
   assert.equal(matchesDomain("docs.example.com", ["example.com"]), true);
   assert.equal(matchesDomain("example.org", ["example.com"]), false);
+});
+
+test("enables periodic page memory sampling by default", () => {
+  assert.equal(DEFAULT_SETTINGS.resourceSampling, true);
 });
 
 test("rejects unsafe or untrusted tabs", () => {

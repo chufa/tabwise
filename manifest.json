@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TabWise",
-  "version": "0.1.0",
+  "version": "0.2.2",
   "description": "A privacy-first tab manager with safe suspension and local smart organization.",
   "permissions": [
     "tabs",
@@ -11,7 +11,7 @@
     "scripting",
     "sidePanel"
   ],
-  "optional_host_permissions": [
+  "host_permissions": [
     "http://*/*",
     "https://*/*"
   ],

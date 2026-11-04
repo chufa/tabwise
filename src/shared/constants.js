@@ -10,7 +10,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   suspensionMode: "conservative",
   suspensionStrategy: "placeholder",
   semanticSearch: false,
-  resourceSampling: false,
+  resourceSampling: true,
   trustedDomains: [],
   blockedDomains: [],
   pauseUntil: 0

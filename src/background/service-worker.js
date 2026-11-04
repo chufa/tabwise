@@ -270,6 +270,7 @@ async function restoreCheckpoint(checkpointId) {
 }
 
 async function getDashboard() {
+  await refreshResourceSnapshots();
   const [settings, records, tabs, activity, observedAt, protectionStates, resourceSnapshots] = await Promise.all([getSettings(), getRecords(), chrome.tabs.query({}), getActivity(), getObservedAt(), getProtectionStates(), getResourceSnapshots()]);
   const recordsByTab = new Map(Object.values(records).map((record) => [record.tabId, record]));
   const rows = tabs.map((tab) => {
@@ -457,9 +458,12 @@ async function collectPageHeapDiagnostics(tabs, persist) {
   };
 }
 
-async function refreshResourceSnapshots() {
+async function refreshResourceSnapshots(force = false) {
   const settings = await getSettings();
   if (!settings.resourceSampling) return;
+  const snapshots = await getResourceSnapshots();
+  const newestSnapshot = Math.max(0, ...Object.values(snapshots).map((snapshot) => Number(snapshot.updatedAt || 0)));
+  if (!force && newestSnapshot && Date.now() - newestSnapshot < ALARM_PERIOD_MINUTES * 60_000) return;
   const tabs = (await chrome.tabs.query({})).filter((tab) => tab.id && isSuspendableUrl(tab.url) && !tab.discarded);
   await collectPageHeapDiagnostics(tabs, true);
 }
@@ -551,6 +555,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   await ensureAlarm();
   await ensureCheckpointAlarm();
   await recordExistingTabs();
+  await refreshResourceSnapshots(true);
   await chrome.omnibox.setDefaultSuggestion({ description: "搜索 TabWise 本地页面记忆" });
   if ((await getSettings()).suspensionMode === SUSPENSION_MODES.SMART) {
     await registerProtectionScript();
@@ -561,6 +566,7 @@ chrome.runtime.onStartup.addListener(async () => {
   await ensureAlarm();
   await ensureCheckpointAlarm();
   await rebindSuspendedTabs();
+  await refreshResourceSnapshots(true);
   if ((await getSettings()).suspensionMode === SUSPENSION_MODES.SMART) {
     await registerProtectionScript();
     await initializeExistingProtection();

@@ -66,9 +66,6 @@ try {
   const extensionUrl = `chrome-extension://${extensionId}`;
   const control = await context.newPage();
   await control.goto(`${extensionUrl}/src/sidepanel/sidepanel.html`);
-  const diagnostics = await message(control, "getResourceDiagnostics");
-  assert.deepEqual(diagnostics.permissionRequest, { origins: ["http://*/*", "https://*/*"] });
-  await control.getByText("所有 Chrome 网页可测 JS 堆内存", { exact: false }).waitFor();
 
   const alpha = await context.newPage();
   await alpha.goto(`${fixture.baseUrl}/alpha-research`);
@@ -77,10 +74,17 @@ try {
   const active = await context.newPage();
   await active.goto(`${fixture.baseUrl}/active-work`);
 
+  const diagnostics = await message(control, "getResourceDiagnostics");
+  assert.equal(diagnostics.ok, true, "stable Chromium should collect page heap diagnostics");
+  assert.equal(diagnostics.mode, "heap");
   const dashboard = await message(control, "getDashboard");
   const alphaTab = dashboard.tabs.find((tab) => tab.url.endsWith("/alpha-research"));
   const reactTab = dashboard.tabs.find((tab) => tab.url.endsWith("/react-performance"));
   assert.ok(alphaTab && reactTab, "fixture tabs must appear in the extension dashboard");
+  assert.ok(alphaTab.memory?.usedJSHeapSize > 0, "dashboard should include the latest page heap snapshot");
+  const popup = await context.newPage();
+  await popup.goto(`${extensionUrl}/src/popup/popup.html`);
+  await popup.getByText("JS 堆", { exact: false }).first().waitFor();
 
   const beforeSuspensionHits = fixture.hits.get("alpha-research");
   const placeholder = await message(control, "directSuspendTab", { tabId: alphaTab.id });
