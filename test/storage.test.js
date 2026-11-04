@@ -29,11 +29,14 @@ const {
   addRecoveryCheckpoint,
   getRecentSuspensions,
   getRecoveryCheckpoints,
+  getResourceSnapshots,
   getRecord,
   putRecord,
   removePrimaryRecord,
   removeRecord,
-  removeRecordsForTab
+  removeRecordsForTab,
+  removeResourceSnapshot,
+  saveResourceSnapshots
 } = await import("../src/shared/storage.js");
 
 test("keeps a restore record when its primary dashboard record is cleared", async () => {
@@ -79,4 +82,15 @@ test("deduplicates recovery checkpoints and retains the latest ten", async () =>
   assert.equal(checkpoints.length, 10);
   assert.equal(checkpoints[0].id, "checkpoint-10");
   assert.equal(checkpoints.some((checkpoint) => checkpoint.id === "duplicate"), false);
+});
+
+test("stores current-session page memory snapshots by tab id", async () => {
+  await saveResourceSnapshots({
+    7: { usedJSHeapSize: 8_000_000, totalJSHeapSize: 12_000_000, updatedAt: 1_000 }
+  });
+  const snapshots = await getResourceSnapshots();
+  assert.equal(snapshots[7].usedJSHeapSize, 8_000_000);
+  assert.equal(snapshots[7].updatedAt, 1_000);
+  await removeResourceSnapshot(7);
+  assert.equal((await getResourceSnapshots())[7], undefined);
 });

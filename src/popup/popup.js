@@ -22,6 +22,18 @@ function formatDuration(startedAt) {
   return remainingMinutes ? `${hours} 小时 ${remainingMinutes} 分钟` : `${hours} 小时`;
 }
 
+function formatMemory(bytes) {
+  return Number.isFinite(bytes) && bytes > 0 ? `${Math.round(bytes / 1024 / 1024)} MB` : "";
+}
+
+function memoryLabel(memory) {
+  if (!memory) return "";
+  const value = formatMemory(memory.usedJSHeapSize);
+  if (!value) return "";
+  const minutes = Math.max(0, Math.floor((Date.now() - memory.updatedAt) / 60_000));
+  return `JS 堆 ${value} · ${minutes < 1 ? "刚刚" : `${minutes} 分钟前`}测量`;
+}
+
 function protectionReason(reason) {
   const labels = {
     "Active tab": "当前正在使用",
@@ -132,9 +144,11 @@ function renderTabs() {
       : tab.status === "live" ? { type: "suspend", label: "休眠" }
         : canDirectSuspend ? { type: "direct-suspend", label: "直接休眠" } : null;
     const secondaryAction = canTrust ? { type: "trust", label: "信任网站" } : null;
+    const memory = memoryLabel(tab.memory);
     const subtitle = tab.suspended
       ? `已休眠 ${formatDuration(tab.suspendedAt)} · 已观察 ${formatDuration(tab.observedAt)}`
-      : isProtected ? `${protectionReason(tab.reason)} · 已观察 ${formatDuration(tab.observedAt)}` : `${tab.domain} · ${formatRelativeTime(tab.lastActivity)} · 已观察 ${formatDuration(tab.observedAt)}`;
+      : isProtected ? [memory, protectionReason(tab.reason), `已观察 ${formatDuration(tab.observedAt)}`].filter(Boolean).join(" · ")
+        : [memory, tab.domain, formatRelativeTime(tab.lastActivity), `已观察 ${formatDuration(tab.observedAt)}`].filter(Boolean).join(" · ");
     const rowMessage = state.tabMessages.get(tab.id);
     return row({
       title: tab.title,

@@ -6,6 +6,7 @@ const keys = Object.freeze({
   restoreRecords: "suspensionRestoreRecords",
   recentSuspensions: "recentSuspensions",
   recoveryCheckpoints: "recoveryCheckpoints",
+  resourceSnapshots: "resourceSnapshots",
   activity: "lastActivity",
   observedAt: "firstObservedAt",
   workspaces: "workspaces"
@@ -82,11 +83,27 @@ export async function getObservedAt() {
   return observedAt;
 }
 
+export async function getResourceSnapshots() {
+  const { [keys.resourceSnapshots]: snapshots = {} } = await chrome.storage.session.get(keys.resourceSnapshots);
+  return snapshots;
+}
+
+export async function saveResourceSnapshots(snapshots) {
+  await chrome.storage.session.set({ [keys.resourceSnapshots]: snapshots });
+}
+
+export async function removeResourceSnapshot(tabId) {
+  const snapshots = await getResourceSnapshots();
+  delete snapshots[tabId];
+  await saveResourceSnapshots(snapshots);
+}
+
 export async function removeActivity(tabId) {
-  const { [keys.activity]: activity = {}, [keys.observedAt]: observedAt = {} } = await chrome.storage.session.get([keys.activity, keys.observedAt]);
+  const { [keys.activity]: activity = {}, [keys.observedAt]: observedAt = {}, [keys.resourceSnapshots]: snapshots = {} } = await chrome.storage.session.get([keys.activity, keys.observedAt, keys.resourceSnapshots]);
   delete activity[tabId];
   delete observedAt[tabId];
-  await chrome.storage.session.set({ [keys.activity]: activity, [keys.observedAt]: observedAt });
+  delete snapshots[tabId];
+  await chrome.storage.session.set({ [keys.activity]: activity, [keys.observedAt]: observedAt, [keys.resourceSnapshots]: snapshots });
 }
 
 export async function getWorkspaces() {

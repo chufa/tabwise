@@ -27,9 +27,9 @@ Enable "本地关联搜索" in Settings to expand a small built-in set of techni
 
 Use `tw <keywords>` in Chrome's address bar to search. The first result can be opened with Enter; side panel search shows all matching sources and always uses the normal restore flow.
 
-## Experimental renderer diagnostics
+## Page memory diagnostics
 
-Chrome Dev and Canary users can open the Side Panel and choose `测量一次` under resource diagnostics. TabWise requests the optional `processes` permission only after that action, then takes a single Renderer memory snapshot. Renderer processes can be shared by several tabs, so memory is displayed once per Renderer with its related tabs, not as exact per-tab memory. Stable Chrome and Edge will clearly report that this API is unavailable.
+Open the Side Panel and choose `测量一次` under resource diagnostics to view JavaScript heap memory for each open webpage on Chrome. TabWise requests website access only after that action, then refreshes session-only snapshots alongside its one-minute suspension check and shows the latest value directly in each tab row. Chrome Dev and Canary can additionally grant the optional `processes` permission to display shared Renderer private memory. Renderer processes can be shared by several tabs, so that metric is shown once per Renderer with its related tabs, not as exact per-tab memory.
 
 ## Suspension modes
 

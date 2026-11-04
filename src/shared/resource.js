@@ -23,3 +23,26 @@ export function buildRendererDiagnostics(tabs, processIdByTab, processInfoById) 
     .map((renderer) => ({ ...renderer, tabCount: renderer.tabs.length }))
     .sort((left, right) => right.privateMemory - left.privateMemory);
 }
+
+export function buildHeapDiagnostics(tabs, heapByTab) {
+  return tabs
+    .map((tab) => {
+      const heap = heapByTab.get(tab.id);
+      if (!heap || !Number.isFinite(heap.usedJSHeapSize)) return null;
+      return {
+        kind: "heap",
+        processId: null,
+        privateMemory: 0,
+        jsMemoryUsed: Number(heap.usedJSHeapSize),
+        jsMemoryAllocated: Number(heap.totalJSHeapSize || 0),
+        tabCount: 1,
+        tabs: [{
+          id: tab.id,
+          title: tab.title || "Untitled tab",
+          domain: domainForUrl(tab.url || "")
+        }]
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => right.jsMemoryUsed - left.jsMemoryUsed);
+}

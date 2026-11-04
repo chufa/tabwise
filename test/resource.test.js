@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildRendererDiagnostics } from "../src/shared/resource.js";
+import { buildHeapDiagnostics, buildRendererDiagnostics } from "../src/shared/resource.js";
 
 test("groups tabs that share a renderer without double counting memory", () => {
   const diagnostics = buildRendererDiagnostics(
@@ -31,4 +31,22 @@ test("ignores tabs without a measurable renderer", () => {
     {}
   );
   assert.deepEqual(diagnostics, []);
+});
+
+test("lists stable-browser JavaScript heap measurements per webpage", () => {
+  const diagnostics = buildHeapDiagnostics(
+    [
+      { id: 1, title: "Alpha", url: "https://example.com/a" },
+      { id: 2, title: "Beta", url: "https://other.test/b" }
+    ],
+    new Map([
+      [1, { usedJSHeapSize: 8_000_000, totalJSHeapSize: 12_000_000 }],
+      [2, { usedJSHeapSize: 16_000_000, totalJSHeapSize: 24_000_000 }]
+    ])
+  );
+
+  assert.equal(diagnostics[0].kind, "heap");
+  assert.equal(diagnostics[0].tabs[0].title, "Beta");
+  assert.equal(diagnostics[0].jsMemoryUsed, 16_000_000);
+  assert.equal(diagnostics[0].privateMemory, 0);
 });

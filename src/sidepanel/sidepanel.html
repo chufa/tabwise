@@ -37,8 +37,8 @@
           <h2>资源诊断</h2>
           <button id="measure-resources" class="quiet-button" type="button">测量一次</button>
         </div>
-        <p class="hint">仅在 Chrome Dev 或 Canary 中可用。共享 Renderer 的内存不会重复计入每个网页。</p>
-        <div id="renderer-diagnostics" class="results empty-state">按需测量当前网页的 Renderer 内存。</div>
+        <p class="hint">所有 Chrome 网页可测 JS 堆内存；启用后会按 1 分钟休眠检查周期更新。Dev/Canary 可额外显示共享 Renderer 私有内存。</p>
+        <div id="renderer-diagnostics" class="results empty-state">按需测量当前网页的内存。</div>
       </section>
 
       <section class="section">

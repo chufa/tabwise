@@ -54,13 +54,18 @@ function formatMemory(bytes) {
 
 function rendererRow(renderer) {
   const pages = renderer.tabs.map((tab) => tab.title).join("、");
-  const sharing = renderer.tabCount > 1 ? `${renderer.tabCount} 个网页共享` : "1 个网页";
+  const isHeap = renderer.kind === "heap";
+  const label = isHeap ? "网页 JS 堆（估算）" : `Renderer ${renderer.processId}`;
+  const detail = isHeap
+    ? `已分配 ${formatMemory(renderer.jsMemoryAllocated)}`
+    : `${renderer.tabCount > 1 ? `${renderer.tabCount} 个网页共享` : "1 个网页"} · JS ${formatMemory(renderer.jsMemoryUsed)}`;
+  const value = isHeap ? formatMemory(renderer.jsMemoryUsed) : formatMemory(renderer.privateMemory);
   return `<article class="result">
     <div class="result-copy">
       <strong title="${escapeHtml(pages)}">${escapeHtml(pages)}</strong>
-      <span>Renderer ${renderer.processId} · ${sharing} · JS ${formatMemory(renderer.jsMemoryUsed)}</span>
+      <span>${label} · ${detail}</span>
     </div>
-    <span class="resource-value">${formatMemory(renderer.privateMemory)}</span>
+    <span class="resource-value">${value}</span>
   </article>`;
 }
 
@@ -81,6 +86,7 @@ async function loadDashboard() {
   $("#state").textContent = settings.autoSuspend
     ? `自动休眠开启 · ${settings.idleMinutes} 分钟阈值`
     : `${summary.unloaded} 个页面处于休眠`;
+  $("#measure-resources").textContent = settings.resourceSampling ? "立即更新" : "测量一次";
   $("#candidate-count").textContent = dashboard.candidates.length ? `${dashboard.candidates.length} 项` : "无";
   $("#candidates").className = dashboard.candidates.length ? "results" : "results empty-state";
   $("#candidates").innerHTML = dashboard.candidates.map(candidateRow).join("") || "目前没有可自动休眠的页面。";
@@ -160,17 +166,20 @@ $("#measure-resources").addEventListener("click", async () => {
   const button = $("#measure-resources");
   button.disabled = true;
   try {
-    let result = await chrome.runtime.sendMessage({ type: "getResourceDiagnostics" });
-    if (result.permissionRequired) {
-      const granted = await chrome.permissions.request({ permissions: ["processes"] });
-      result = granted
-        ? await chrome.runtime.sendMessage({ type: "getResourceDiagnostics" })
-        : { ok: false, reason: "未授予资源诊断权限。" };
+    const origins = ["http://*/*", "https://*/*"];
+    const hasAccess = await chrome.permissions.contains({ origins });
+    if (!hasAccess && !await chrome.permissions.request({ origins })) {
+      const result = { ok: false, reason: "未授予网页内存测量权限。" };
+      renderDiagnostics(result);
+      setFeedback(result.reason, true);
+      return;
     }
+    await chrome.runtime.sendMessage({ type: "enableResourceSampling" });
+    let result = await chrome.runtime.sendMessage({ type: "getResourceDiagnostics" });
     renderDiagnostics(result);
-    setFeedback(result.ok ? "已采集一次 Renderer 内存快照" : result.reason, !result.ok);
+    setFeedback(result.ok ? "已采集一次网页内存快照" : result.reason, !result.ok);
   } catch {
-    const result = { ok: false, reason: "当前浏览器不支持 Renderer 内存诊断。" };
+    const result = { ok: false, reason: "当前浏览器无法读取网页内存。" };
     renderDiagnostics(result);
     setFeedback(result.reason, true);
   } finally {

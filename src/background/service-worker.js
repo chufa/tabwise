@@ -1,14 +1,15 @@
 import { ALARM_NAME, ALARM_PERIOD_MINUTES, CHECKPOINT_ALARM_NAME, CHECKPOINT_PERIOD_MINUTES, SUSPENDED_PAGE, SUSPENSION_MODES, SUSPENSION_STATES, SUSPENSION_STRATEGIES } from "../shared/constants.js";
 import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isIdleLongEnough, isSuspendableUrl, isSuspendedUrl, normalizeDomain, planLocalOrganization, smartSuspensionBlockReason, suspensionBlockReason } from "../shared/policy.js";
-import { addRecentSuspension, addRecoveryCheckpoint, addWorkspace, getActivity, getObservedAt, getRecentSuspensions, getRecord, getRecords, getRecoveryCheckpoints, getSettings, getWorkspaces, putRecord, removeActivity, removePrimaryRecord, removeRecentSuspension, removeRecord, removeRecordsForTab, saveSettings, touchTab, updateWorkspace } from "../shared/storage.js";
+import { addRecentSuspension, addRecoveryCheckpoint, addWorkspace, getActivity, getObservedAt, getRecentSuspensions, getRecord, getRecords, getRecoveryCheckpoints, getResourceSnapshots, getSettings, getWorkspaces, putRecord, removeActivity, removePrimaryRecord, removeRecentSuspension, removeRecord, removeRecordsForTab, removeResourceSnapshot, saveResourceSnapshots, saveSettings, touchTab, updateWorkspace } from "../shared/storage.js";
 import { buildSuspendCandidate, searchPageMemory } from "../shared/search.js";
-import { buildRendererDiagnostics } from "../shared/resource.js";
+import { buildHeapDiagnostics, buildRendererDiagnostics } from "../shared/resource.js";
 
 const extensionOrigin = chrome.runtime.getURL("").replace(/\/$/, "");
 const tabQueues = new Map();
 const PAGE_PROTECTION_KEY = "pageProtectionStates";
 const PAGE_PROTECTION_SCRIPT_ID = "tabwise-page-protection";
 const SMART_ORIGINS = ["http://*/*", "https://*/*"];
+const DIAGNOSTIC_ORIGINS = ["http://*/*", "https://*/*"];
 
 function escapeOmniboxText(value) {
   return String(value || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -38,6 +39,7 @@ function sanitizeSettings(current, update) {
       ? update.suspensionStrategy
       : current.suspensionStrategy,
     semanticSearch: typeof update.semanticSearch === "boolean" ? update.semanticSearch : current.semanticSearch,
+    resourceSampling: typeof update.resourceSampling === "boolean" ? update.resourceSampling : current.resourceSampling,
     trustedDomains: Array.isArray(update.trustedDomains) ? normalizeList(update.trustedDomains) : current.trustedDomains,
     blockedDomains: Array.isArray(update.blockedDomains) ? normalizeList(update.blockedDomains) : current.blockedDomains,
     pauseUntil: Number.isFinite(pauseUntil) && pauseUntil > Date.now() ? pauseUntil : 0
@@ -268,7 +270,7 @@ async function restoreCheckpoint(checkpointId) {
 }
 
 async function getDashboard() {
-  const [settings, records, tabs, activity, observedAt, protectionStates] = await Promise.all([getSettings(), getRecords(), chrome.tabs.query({}), getActivity(), getObservedAt(), getProtectionStates()]);
+  const [settings, records, tabs, activity, observedAt, protectionStates, resourceSnapshots] = await Promise.all([getSettings(), getRecords(), chrome.tabs.query({}), getActivity(), getObservedAt(), getProtectionStates(), getResourceSnapshots()]);
   const recordsByTab = new Map(Object.values(records).map((record) => [record.tabId, record]));
   const rows = tabs.map((tab) => {
     const record = recordsByTab.get(tab.id);
@@ -293,7 +295,8 @@ async function getDashboard() {
       lastActivity: activity[tab.id] || 0,
       observedAt: observedAt[tab.id] || 0,
       lastAccessed: tab.lastAccessed || activity[tab.id] || 0,
-      windowId: tab.windowId
+      windowId: tab.windowId,
+      memory: resourceSnapshots[tab.id] || null
     };
   });
   const liveTabs = tabs.filter((tab) => !isSuspendedUrl(tab.url, extensionOrigin));
@@ -399,23 +402,72 @@ async function openSearchResult(result) {
 }
 
 async function getResourceDiagnostics() {
-  if (!chrome.processes?.getProcessIdForTab || !chrome.processes?.getProcessInfo) {
-    return { ok: false, supported: false, reason: "资源诊断仅支持 Chrome Dev 或 Canary。" };
-  }
-  const granted = await chrome.permissions.contains({ permissions: ["processes"] });
-  if (!granted) return { ok: false, supported: true, permissionRequired: true };
-
   const tabs = (await chrome.tabs.query({})).filter((tab) => tab.id && isSuspendableUrl(tab.url) && !tab.discarded);
-  const entries = await Promise.all(tabs.map(async (tab) => [tab, await chrome.processes.getProcessIdForTab(tab.id).catch(() => null)]));
-  const processIdByTab = new Map(entries.filter(([, processId]) => Number.isInteger(processId)).map(([tab, processId]) => [tab.id, processId]));
-  const processIds = [...new Set(processIdByTab.values())];
-  if (!processIds.length) return { ok: true, measuredAt: Date.now(), renderers: [] };
-  const processInfo = await chrome.processes.getProcessInfo(processIds, true);
+  const hasProcessApi = Boolean(chrome.processes?.getProcessIdForTab && chrome.processes?.getProcessInfo);
+  const hasProcessPermission = hasProcessApi && await chrome.permissions.contains({ permissions: ["processes"] });
+  if (hasProcessPermission) {
+    await collectPageHeapDiagnostics(tabs, true);
+    const entries = await Promise.all(tabs.map(async (tab) => [tab, await chrome.processes.getProcessIdForTab(tab.id).catch(() => null)]));
+    const processIdByTab = new Map(entries.filter(([, processId]) => Number.isInteger(processId)).map(([tab, processId]) => [tab.id, processId]));
+    const processIds = [...new Set(processIdByTab.values())];
+    if (!processIds.length) return { ok: true, mode: "renderer", measuredAt: Date.now(), renderers: [] };
+    const processInfo = await chrome.processes.getProcessInfo(processIds, true);
+    return {
+      ok: true,
+      mode: "renderer",
+      measuredAt: Date.now(),
+      renderers: buildRendererDiagnostics(tabs, processIdByTab, processInfo)
+    };
+  }
+
+  return collectPageHeapDiagnostics(tabs, true);
+}
+
+async function collectPageHeapDiagnostics(tabs, persist) {
+  const hostsGranted = await chrome.permissions.contains({ origins: DIAGNOSTIC_ORIGINS });
+  if (!hostsGranted) return {
+    ok: false,
+    permissionRequest: { origins: DIAGNOSTIC_ORIGINS },
+    reason: "请允许网页访问权限，以测量各网页的 JavaScript 堆内存。"
+  };
+  const measurements = await Promise.all(tabs.map(async (tab) => {
+    const result = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        const memory = performance.memory;
+        return memory ? {
+          usedJSHeapSize: memory.usedJSHeapSize,
+          totalJSHeapSize: memory.totalJSHeapSize
+        } : null;
+      }
+    }).catch(() => []);
+    return [tab.id, result[0]?.result];
+  }));
+  const heapByTab = new Map(measurements.filter(([, heap]) => heap));
+  const measuredAt = Date.now();
+  if (persist) {
+    const snapshots = Object.fromEntries([...heapByTab.entries()].map(([tabId, heap]) => [tabId, { ...heap, updatedAt: measuredAt }]));
+    await saveResourceSnapshots(snapshots);
+  }
   return {
     ok: true,
-    measuredAt: Date.now(),
-    renderers: buildRendererDiagnostics(tabs, processIdByTab, processInfo)
+    mode: "heap",
+    measuredAt,
+    renderers: buildHeapDiagnostics(tabs, heapByTab)
   };
+}
+
+async function refreshResourceSnapshots() {
+  const settings = await getSettings();
+  if (!settings.resourceSampling) return;
+  const tabs = (await chrome.tabs.query({})).filter((tab) => tab.id && isSuspendableUrl(tab.url) && !tab.discarded);
+  await collectPageHeapDiagnostics(tabs, true);
+}
+
+async function enableResourceSampling() {
+  const settings = await getSettings();
+  await saveSettings({ ...settings, resourceSampling: true });
+  return { ok: true };
 }
 
 async function getSuspendedRecordForSender(recordId, sender) {
@@ -546,7 +598,12 @@ chrome.omnibox.onInputEntered.addListener((text) => {
   }
 });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === ALARM_NAME) processIdleTabs().catch(console.error);
+  if (alarm.name === ALARM_NAME) {
+    (async () => {
+      await processIdleTabs();
+      await refreshResourceSnapshots();
+    })().catch(console.error);
+  }
   if (alarm.name === CHECKPOINT_ALARM_NAME) createRecoveryCheckpoint().catch(console.error);
 });
 chrome.tabs.onActivated.addListener(({ tabId }) => touchTab(tabId));
@@ -554,7 +611,9 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   await Promise.all([removeActivity(tabId), removeRecordsForTab(tabId), removeProtectionState(tabId)]);
 });
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.url) removeProtectionState(tabId).catch(console.error);
+  if (changeInfo.url) {
+    Promise.all([removeProtectionState(tabId), removeResourceSnapshot(tabId)]).catch(console.error);
+  }
   if (changeInfo.status !== "complete") return;
   (async () => {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
@@ -575,6 +634,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tasks = {
     getDashboard,
     getResourceDiagnostics,
+    enableResourceSampling,
     searchPages: () => searchPages(message.query, message.limit),
     openSearchResult: () => openSearchResult(message.result),
     getSuspendedRecord: () => getSuspendedRecordForSender(message.recordId, sender),
