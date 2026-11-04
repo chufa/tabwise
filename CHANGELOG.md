@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.2 - 2026-11-04
+
+### Fixes
+
+- Enable page heap sampling by default and refresh stale values when the tab list opens.
+- Show latest page memory directly in tab rows without requiring a manual diagnostics action.
+- Request webpage access at installation so automatic sampling is available immediately.
+
 ## 0.2.1 - 2026-11-04
 
 ### Fixes
