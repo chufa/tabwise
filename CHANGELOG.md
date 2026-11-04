@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 - 2026-11-04
+
+### Fixes
+
+- Show latest JavaScript heap measurements directly in tab rows after user-approved sampling.
+- Refresh session-only page memory snapshots with the one-minute suspension check.
+- Clear stale measurements when a tab navigates or closes.
+
 ## 0.2.0 - 2026-11-04
 
 ### Features
