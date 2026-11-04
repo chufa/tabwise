@@ -2,7 +2,7 @@ import { ALARM_NAME, ALARM_PERIOD_MINUTES, CHECKPOINT_ALARM_NAME, CHECKPOINT_PER
 import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isIdleLongEnough, isSuspendableUrl, isSuspendedUrl, normalizeDomain, planLocalOrganization, smartSuspensionBlockReason, suspensionBlockReason } from "../shared/policy.js";
 import { addRecentSuspension, addRecoveryCheckpoint, addWorkspace, getActivity, getObservedAt, getRecentSuspensions, getRecord, getRecords, getRecoveryCheckpoints, getResourceSnapshots, getSettings, getWorkspaces, putRecord, removeActivity, removePrimaryRecord, removeRecentSuspension, removeRecord, removeRecordsForTab, removeResourceSnapshot, saveResourceSnapshots, saveSettings, touchTab, updateWorkspace } from "../shared/storage.js";
 import { buildSuspendCandidate, searchPageMemory } from "../shared/search.js";
-import { buildHeapDiagnostics, buildRendererDiagnostics } from "../shared/resource.js";
+import { buildHeapDiagnostics, buildRendererDiagnostics, summarizeHeapSnapshots } from "../shared/resource.js";
 
 const extensionOrigin = chrome.runtime.getURL("").replace(/\/$/, "");
 const tabQueues = new Map();
@@ -170,6 +170,7 @@ async function suspendTab(tabId, reason = "manual", allowProtected = false) {
         const expectedUrl = `${chrome.runtime.getURL(SUSPENDED_PAGE)}#${recordId}`;
         await chrome.tabs.update(tabId, { url: expectedUrl });
       }
+      await removeResourceSnapshot(tabId).catch(console.error);
       const suspendedRecord = { ...record, mode, state: SUSPENSION_STATES.SUSPENDED };
       await putRecord(suspendedRecord);
       await addRecentSuspension(suspendedRecord);
@@ -313,7 +314,8 @@ async function getDashboard() {
     summary: {
       eligible: rows.filter((row) => row.status === "live").length,
       protected: rows.filter((row) => row.status === "protected").length,
-      unloaded: rows.filter((row) => row.suspended).length
+      unloaded: rows.filter((row) => row.suspended).length,
+      ...summarizeHeapSnapshots(resourceSnapshots)
     },
     candidates
   };

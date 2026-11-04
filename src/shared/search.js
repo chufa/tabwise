@@ -54,6 +54,35 @@ function fieldScore(value, terms, weight) {
   }, 0);
 }
 
+function tabActivityTime(tab) {
+  return Number(tab.lastActivity || tab.lastAccessed || tab.observedAt || 0);
+}
+
+function tabMemoryUsage(tab) {
+  const usage = Number(tab.memory?.usedJSHeapSize);
+  return Number.isFinite(usage) && usage > 0 ? usage : null;
+}
+
+export function sortTabs(tabs, sort = "recent") {
+  return [...tabs].sort((left, right) => {
+    if (sort === "duration") {
+      const duration = Number(left.observedAt || 0) - Number(right.observedAt || 0);
+      if (duration) return duration;
+    }
+
+    if (sort === "memory") {
+      const leftMemory = tabMemoryUsage(left);
+      const rightMemory = tabMemoryUsage(right);
+      if (leftMemory === null && rightMemory !== null) return 1;
+      if (leftMemory !== null && rightMemory === null) return -1;
+      if (leftMemory !== null && rightMemory !== null && leftMemory !== rightMemory) return rightMemory - leftMemory;
+    }
+
+    return tabActivityTime(right) - tabActivityTime(left)
+      || String(left.title || "").localeCompare(String(right.title || ""));
+  });
+}
+
 export function searchPageMemory(pages, query, limit = 30, options = {}) {
   const groups = queryGroups(query, Boolean(options.semantic));
   if (!groups.length) return [];

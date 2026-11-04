@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildSuspendCandidate, searchPageMemory } from "../src/shared/search.js";
+import { buildSuspendCandidate, searchPageMemory, sortTabs } from "../src/shared/search.js";
 
 const pages = [
   {
@@ -53,6 +53,19 @@ test("uses opt-in local term associations without sending page data away", () =>
 
 test("returns empty results for an empty query", () => {
   assert.deepEqual(searchPageMemory(pages, "   "), []);
+});
+
+test("sorts tabs by recency, observed duration, and measured JS heap", () => {
+  const tabs = [
+    { id: 1, title: "Recent", lastActivity: 300, observedAt: 100, memory: { usedJSHeapSize: 10 } },
+    { id: 2, title: "Longest", lastActivity: 100, observedAt: 10, memory: { usedJSHeapSize: 500 } },
+    { id: 3, title: "Unknown memory", lastActivity: 200, observedAt: 50 }
+  ];
+
+  assert.deepEqual(sortTabs(tabs, "recent").map((tab) => tab.id), [1, 3, 2]);
+  assert.deepEqual(sortTabs(tabs, "duration").map((tab) => tab.id), [2, 3, 1]);
+  assert.deepEqual(sortTabs(tabs, "memory").map((tab) => tab.id), [2, 1, 3]);
+  assert.deepEqual(tabs.map((tab) => tab.id), [1, 2, 3]);
 });
 
 test("explains a safe suspension candidate without overriding protection", () => {

@@ -1,5 +1,17 @@
 import { domainForUrl } from "./policy.js";
 
+export function summarizeHeapSnapshots(snapshots) {
+  return Object.values(snapshots).reduce((summary, snapshot) => {
+    const usage = Number(snapshot?.usedJSHeapSize);
+    if (!Number.isFinite(usage) || usage <= 0) return summary;
+    return {
+      jsHeapUsage: summary.jsHeapUsage + usage,
+      jsHeapMeasuredTabs: summary.jsHeapMeasuredTabs + 1,
+      jsHeapUpdatedAt: Math.max(summary.jsHeapUpdatedAt, Number(snapshot.updatedAt || 0))
+    };
+  }, { jsHeapUsage: 0, jsHeapMeasuredTabs: 0, jsHeapUpdatedAt: 0 });
+}
+
 export function buildRendererDiagnostics(tabs, processIdByTab, processInfoById) {
   const byProcess = new Map();
   for (const tab of tabs) {

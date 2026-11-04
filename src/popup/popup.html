@@ -29,6 +29,7 @@
       <div><strong id="eligible-count">0</strong><span>可休眠</span></div>
       <div><strong id="suspended-count">0</strong><span>休眠中</span></div>
       <div><strong id="duplicate-count">0</strong><span>重复页</span></div>
+      <div><strong id="js-heap-usage">--</strong><span>JS 堆总量</span></div>
     </section>
     <p id="resource-note" class="resource-note" role="note"></p>
 
@@ -64,6 +65,14 @@
       <label class="search-field">
         <span class="visually-hidden">搜索标签页</span>
         <input id="tab-search" type="search" placeholder="搜索标题或网站">
+      </label>
+      <label class="sort-field">
+        <span>排序</span>
+        <select id="tab-sort" aria-label="标签页排序">
+          <option value="recent">最近活跃</option>
+          <option value="duration">运行时间最长</option>
+          <option value="memory">JS 堆内存最大</option>
+        </select>
       </label>
       <div class="filter-bar" role="group" aria-label="标签状态筛选">
         <button class="filter is-active" data-filter="all" type="button">全部</button>

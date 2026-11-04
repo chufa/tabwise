@@ -9,9 +9,9 @@
 * { box-sizing: border-box; }
 body { width: 410px; max-height: 620px; overflow: auto; margin: 0; padding: 20px; }
 body::selection { background: #b9e3cc; color: #102319; }
-button, input { font: inherit; }
+button, input, select { font: inherit; }
 button { cursor: pointer; }
-button:focus-visible, input:focus-visible { outline: 3px solid #8fcaae; outline-offset: 2px; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #8fcaae; outline-offset: 2px; }
 
 .topbar, .section-heading, .command-strip, .row, .summary, .filter-bar, .workspace-form, .row-actions, .topbar-actions { display: flex; align-items: center; }
 .topbar, .section-heading { justify-content: space-between; gap: 14px; }
@@ -35,7 +35,7 @@ button:disabled { opacity: .52; cursor: default; }
 .feedback { min-height: 17px; margin-top: 8px; color: #1b684a; }
 .feedback.is-error { color: #9b2c31; }
 .summary { justify-content: space-between; gap: 4px; margin: 13px 0 24px; padding: 12px 8px; border-top: 1px solid #dbe5dd; border-bottom: 1px solid #dbe5dd; }
-.summary div { min-width: 68px; display: grid; gap: 3px; text-align: center; }
+.summary div { min-width: 64px; display: grid; gap: 3px; text-align: center; }
 .summary strong { font-variant-numeric: tabular-nums; font-size: 17px; line-height: 1; }
 .summary span, .count-label { color: #627669; font-size: 11px; }
 .resource-note { margin: -16px 0 2px; color: #607468; font-size: 11px; line-height: 1.5; }
@@ -52,9 +52,12 @@ button:disabled { opacity: .52; cursor: default; }
 .status-badge { flex: 0 0 auto; padding: 3px 5px; border-radius: 4px; color: #7c5b00; background: #fff3c9; font-size: 11px; font-weight: 700; }
 .status-badge.resting { color: #1a6548; background: #e5f3e9; }
 
-.search-field input, .workspace-form input, .workspace-search-field input { width: 100%; min-width: 0; border: 1px solid #c6d8cb; border-radius: 6px; background: #fff; color: #17211b; }
+.search-field input, .workspace-form input, .workspace-search-field input, .sort-field select { min-width: 0; border: 1px solid #c6d8cb; border-radius: 6px; background: #fff; color: #17211b; }
+.search-field input, .workspace-form input, .workspace-search-field input { width: 100%; }
 .search-field input { padding: 9px 10px; font-size: 12px; }
 .search-field input::placeholder, .workspace-form input::placeholder { color: #819086; }
+.sort-field { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 9px; color: #607468; font-size: 11px; }
+.sort-field select { padding: 5px 8px; font-size: 12px; }
 .filter-bar { gap: 4px; margin: 10px 0; overflow-x: auto; }
 .filter { flex: 0 0 auto; border: 1px solid transparent; border-radius: 5px; padding: 5px 7px; background: transparent; color: #607468; font-size: 11px; }
 .filter:hover { background: #edf4ef; }
@@ -81,12 +84,12 @@ button:disabled { opacity: .52; cursor: default; }
   .topbar p, .subtle, .summary span, .count-label, .row-main span, .empty-state { color: #a9bdae; }
   .resource-note { color: #a9bdae; }
   .summary { border-color: #33483a; }
-  .row, .secondary-button, .action-button, .search-field input, .workspace-form input, .workspace-search-field input { border-color: #405645; background: #1d2c23; color: #eaf2eb; }
+  .row, .secondary-button, .action-button, .search-field input, .workspace-form input, .workspace-search-field input, .sort-field select { border-color: #405645; background: #1d2c23; color: #eaf2eb; }
   .search-field input::placeholder, .workspace-form input::placeholder, .workspace-search-field input::placeholder { color: #aebfb3; }
   .secondary-button, .action-button, .quiet-button { color: #9dd9b1; }
   .action-button:hover, .secondary-button:hover, .filter:hover { background: #284332; }
   .filter { color: #b2c8b6; }
-  .protection-hint { color: #a9bdae; }
+  .protection-hint, .sort-field { color: #a9bdae; }
   .filter.is-active { border-color: #4b7457; background: #284a35; color: #c8f0d2; }
   .status-badge { background: #493c1c; color: #f3d67b; }
   .status-badge.resting { background: #254533; color: #aee7be; }

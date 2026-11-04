@@ -1,7 +1,8 @@
 import { escapeHtml } from "../shared/html.js";
+import { sortTabs } from "../shared/search.js";
 
 const $ = (selector) => document.querySelector(selector);
-const state = { data: null, filter: "all", search: "", workspaceSearch: "", workspaces: [], recent: [], checkpoints: [], expandedSuggestions: new Set(), tabMessages: new Map() };
+const state = { data: null, filter: "all", sort: "recent", search: "", workspaceSearch: "", workspaces: [], recent: [], checkpoints: [], expandedSuggestions: new Set(), tabMessages: new Map() };
 
 function formatRelativeTime(timestamp) {
   if (!timestamp) return "刚开始追踪";
@@ -32,6 +33,14 @@ function memoryLabel(memory) {
   if (!value) return "";
   const minutes = Math.max(0, Math.floor((Date.now() - memory.updatedAt) / 60_000));
   return `JS 堆 ${value} · ${minutes < 1 ? "刚刚" : `${minutes} 分钟前`}测量`;
+}
+
+function heapSummaryLabel(summary) {
+  const usage = formatMemory(summary.jsHeapUsage);
+  if (!usage) return "--";
+  const minutes = Math.max(0, Math.floor((Date.now() - Number(summary.jsHeapUpdatedAt || 0)) / 60_000));
+  const measuredAt = minutes < 1 ? "刚刚测量" : `${minutes} 分钟前测量`;
+  return `${usage} · ${summary.jsHeapMeasuredTabs} 页 · ${measuredAt}`;
 }
 
 function protectionReason(reason) {
@@ -90,11 +99,12 @@ function renderAutomationState(settings) {
 
 function visibleTabs() {
   const normalizedSearch = state.search.trim().toLowerCase();
-  return state.data.tabs.filter((tab) => {
+  const tabs = state.data.tabs.filter((tab) => {
     const matchesFilter = state.filter === "all" || (state.filter === "suspended" ? tab.suspended : tab.status === state.filter);
     const matchesSearch = !normalizedSearch || `${tab.title} ${tab.domain}`.toLowerCase().includes(normalizedSearch);
     return matchesFilter && matchesSearch;
   });
+  return sortTabs(tabs, state.sort);
 }
 
 function renderSuggestions(organization) {
@@ -195,6 +205,7 @@ async function render() {
   $("#eligible-count").textContent = summary.eligible;
   $("#suspended-count").textContent = tabs.filter((tab) => tab.suspended).length;
   $("#duplicate-count").textContent = organization.duplicates.reduce((total, group) => total + group.tabIds.length - 1, 0);
+  $("#js-heap-usage").textContent = heapSummaryLabel(summary);
   $("#resource-note").textContent = summary.unloaded
     ? state.data.settings.suspensionStrategy === "native-discard"
       ? `已由 Chrome 原生卸载 ${summary.unloaded} 个页面；切回时会自动重新加载。`
@@ -297,6 +308,10 @@ $("#suspend-eligible").addEventListener("click", async () => {
 });
 $("#tab-search").addEventListener("input", (event) => {
   state.search = event.target.value;
+  renderTabs();
+});
+$("#tab-sort").addEventListener("change", (event) => {
+  state.sort = event.target.value;
   renderTabs();
 });
 document.querySelector(".filter-bar").addEventListener("click", (event) => {

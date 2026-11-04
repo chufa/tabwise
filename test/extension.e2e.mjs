@@ -82,13 +82,19 @@ try {
   const reactTab = dashboard.tabs.find((tab) => tab.url.endsWith("/react-performance"));
   assert.ok(alphaTab && reactTab, "fixture tabs must appear in the extension dashboard");
   assert.ok(alphaTab.memory?.usedJSHeapSize > 0, "dashboard should include the latest page heap snapshot");
+  assert.ok(dashboard.summary.jsHeapUsage >= alphaTab.memory.usedJSHeapSize, "dashboard should include total JS heap usage");
   const popup = await context.newPage();
   await popup.goto(`${extensionUrl}/src/popup/popup.html`);
-  await popup.getByText("JS 堆", { exact: false }).first().waitFor();
+  await popup.locator("#tabs .row-main span").filter({ hasText: "JS 堆" }).first().waitFor();
+  assert.match(await popup.locator("#js-heap-usage").textContent(), /MB/, "popup should show total JS heap usage");
+  await popup.getByLabel("标签页排序").selectOption("memory");
+  assert.equal(await popup.getByLabel("标签页排序").inputValue(), "memory", "popup should allow sorting tabs by JS heap usage");
 
   const beforeSuspensionHits = fixture.hits.get("alpha-research");
   const placeholder = await message(control, "directSuspendTab", { tabId: alphaTab.id });
   assert.equal(placeholder.ok, true, "placeholder suspension should succeed for an inactive web page");
+  const afterSuspension = await message(control, "getDashboard");
+  assert.ok(afterSuspension.summary.jsHeapUsage < dashboard.summary.jsHeapUsage, "suspending a page should reduce the JS heap total");
   await alpha.waitForURL(new RegExp(`${extensionUrl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/src/suspended/suspended\\.html#`));
   assert.equal(fixture.hits.get("alpha-research"), beforeSuspensionHits, "suspending must not reload the source page");
   await assert.doesNotReject(() => alpha.getByRole("button", { name: "恢复页面" }).click());

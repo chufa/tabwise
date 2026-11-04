@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildHeapDiagnostics, buildRendererDiagnostics } from "../src/shared/resource.js";
+import { buildHeapDiagnostics, buildRendererDiagnostics, summarizeHeapSnapshots } from "../src/shared/resource.js";
 
 test("groups tabs that share a renderer without double counting memory", () => {
   const diagnostics = buildRendererDiagnostics(
@@ -49,4 +49,19 @@ test("lists stable-browser JavaScript heap measurements per webpage", () => {
   assert.equal(diagnostics[0].tabs[0].title, "Beta");
   assert.equal(diagnostics[0].jsMemoryUsed, 16_000_000);
   assert.equal(diagnostics[0].privateMemory, 0);
+});
+
+test("summarizes measured JS heap without including stale or invalid snapshots", () => {
+  const summary = summarizeHeapSnapshots({
+    1: { usedJSHeapSize: 8_000_000, updatedAt: 300 },
+    2: { usedJSHeapSize: 16_000_000, updatedAt: 500 },
+    3: { usedJSHeapSize: 0, updatedAt: 600 },
+    4: { usedJSHeapSize: "unknown", updatedAt: 700 }
+  });
+
+  assert.deepEqual(summary, {
+    jsHeapUsage: 24_000_000,
+    jsHeapMeasuredTabs: 2,
+    jsHeapUpdatedAt: 500
+  });
 });
