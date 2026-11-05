@@ -38,9 +38,14 @@ async function restore() {
   }
   restoring = true;
   button.disabled = true;
-  const result = await chrome.runtime.sendMessage({ type: "restoreRecord", recordId });
-  if (!result?.ok) {
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "restoreRecord", recordId });
+    if (result?.ok) return;
     error.textContent = result?.reason || "暂时无法恢复此页面。";
+    button.disabled = false;
+    restoring = false;
+  } catch {
+    error.textContent = "扩展刚刚更新，请刷新此页面后重试。";
     button.disabled = false;
     restoring = false;
   }

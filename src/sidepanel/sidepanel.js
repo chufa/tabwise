@@ -4,6 +4,9 @@ import { createRefresh, connectLiveUI, updateHTML } from "../shared/live-ui.js";
 import { createSessionUI } from "../shared/session-ui.js";
 import { createTaskUI } from "../shared/task-ui.js";
 import { createBudgetUI } from "../shared/budget-ui.js";
+import { createPagedList } from "../shared/paged-ui.js";
+import { createBatchUI } from "../shared/batch-ui.js";
+import { createPalette } from "../shared/palette.js";
 
 const $ = (selector) => document.querySelector(selector);
 let searchTimer;
@@ -16,12 +19,17 @@ let aiWorkspaces = [];
 let aiController;
 let aiSession;
 let aiPort;
+let aiSelection;
+let aiChosen = [];
+let diagnosticList;
 const loadDashboard = createRefresh(refreshDashboard);
 const restoreUI = createRestoreUI($("#restore-preview"), setFeedback, loadDashboard);
 const workspaceUI = createWorkspaceUI($("#workspace-manager"), restoreUI, setFeedback, loadDashboard);
 const sessionUI = createSessionUI($("#session-tools"), restoreUI, setFeedback, loadDashboard);
 const taskUI = createTaskUI($("#restore-tasks"), setFeedback, loadDashboard);
 const budgetUI = createBudgetUI($("#resource-budget"), setFeedback, loadDashboard);
+const batchUI = createBatchUI(setFeedback, loadDashboard);
+createPalette({ feedback: setFeedback, refresh: loadDashboard, restoreUI, batchUI, getDashboard: () => dashboard, saveButton: $("#save-workspace") });
 
 function resetAi() {
   if (aiPrepared) chrome.runtime.sendMessage({ type: "cancelAiGeneration", snapshotId: aiPrepared.snapshot.id }).catch(() => {});
@@ -45,12 +53,17 @@ function renderAiSources() {
   updateHTML($("#ai-workspace"), aiWorkspaces.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}${item.archived ? " · 已归档" : ""}</option>`).join("")
     || '<option value="">暂无工作区</option>');
   if (aiWorkspaces.some((item) => item.id === workspaceId)) $("#ai-workspace").value = workspaceId;
-  const selected = new Set([...$("#ai-tab-options").querySelectorAll("input:checked")].map((input) => input.value));
-  updateHTML($("#ai-tab-options"), dashboard.tabs.filter((tab) => !tab.incognito && /^https?:\/\//.test(tab.url))
-    .map((tab) => `<label class="ai-page"><input type="checkbox" value="${tab.id}" ${selected.has(String(tab.id)) ? "checked" : ""}>
-      <span><strong>${escapeHtml(tab.title)}</strong><small>${escapeHtml(tab.domain)} · 窗口 ${tab.windowId}</small></span></label>`).join("") || "暂无可选择的网页。");
   $("#ai-workspace-field").hidden = $("#ai-scope").value !== "workspace";
   $("#ai-selection").hidden = $("#ai-scope").value !== "selected";
+  if (!$("#ai-selection").hidden) {
+    const fresh = !aiSelection;
+    aiSelection ||= createPagedList($("#ai-tab-options"), { key: (tab) => tab.id, limit: 20, onChange: (values) => { aiChosen = values; resetAi(); },
+      render: (tab) => `<span><strong>${escapeHtml(tab.title)}</strong><small>${escapeHtml(tab.domain)} · 窗口 ${tab.windowId}</small></span>` });
+    aiSelection.setData(dashboard.tabs.filter((tab) => !tab.incognito && /^https?:\/\//.test(tab.url)));
+    if (fresh) aiSelection.setValues(aiChosen);
+  } else if (aiSelection) {
+    aiChosen = aiSelection.values(); aiSelection.destroy(); aiSelection = null; $("#ai-tab-options").replaceChildren();
+  }
 }
 
 const aiStateLabel = (state) => ({ open: "已打开", protected: "已保护", suspended: "休眠中", saved: "已保存" }[state] || state);
@@ -97,7 +110,10 @@ function candidateRow(candidate) {
       <strong title="${escapeHtml(tab.title)}">${escapeHtml(tab.title)}</strong>
       <span>${escapeHtml([candidate.explanation, candidate.estimatedJSHeap ? `预计释放 ${formatMemory(candidate.estimatedJSHeap)}` : ""].filter(Boolean).join(" · "))}</span>
     </div>
-    <button class="action-button" data-action="suspend" data-tab-id="${tab.id}" type="button">休眠</button>
+    <div class="candidate-actions">
+      <button class="quiet-button" data-action="focus-candidate" data-tab-id="${tab.id}" type="button">详情</button>
+      <button class="action-button" data-action="suspend" data-tab-id="${tab.id}" type="button">休眠</button>
+    </div>
   </article>`;
 }
 
@@ -141,12 +157,14 @@ function reviewRow(review) {
 function renderDiagnostics(result) {
   const container = $("#renderer-diagnostics");
   if (!result?.ok) {
+    diagnosticList?.destroy(); diagnosticList = null;
     container.className = "results empty-state";
     container.textContent = result?.reason || "浏览器未提供 Renderer 内存数据。";
     return;
   }
   container.className = result.renderers.length ? "results" : "results empty-state";
-  container.innerHTML = result.renderers.map(rendererRow).join("") || "没有可测量的网页 Renderer。";
+  diagnosticList ||= createPagedList(container, { key: (item) => item.listId, selectable: false, render: rendererRow });
+  diagnosticList.setData(result.renderers.map((renderer, index) => ({ ...renderer, listId: renderer.processId ?? index, title: renderer.tabs.map((tab) => tab.title).join(" ") })));
 }
 
 async function refreshDashboard() {
@@ -256,6 +274,7 @@ document.body.addEventListener("click", async (event) => {
   try {
     let result;
     if (button.dataset.action === "open-result") result = await chrome.runtime.sendMessage({ type: "openSearchResult", result: JSON.parse(button.dataset.result) });
+    if (button.dataset.action === "focus-candidate") result = await chrome.runtime.sendMessage({ type: "focusTab", tabId: Number(button.dataset.tabId) });
     if (button.dataset.action === "suspend") result = await chrome.runtime.sendMessage({ type: "directSuspendTab", tabId: Number(button.dataset.tabId) });
     if (button.dataset.action === "restore-recent") result = await chrome.runtime.sendMessage({ type: "restoreRecentSuspension", recordId: button.dataset.id });
     if (button.dataset.action === "restore-checkpoint") {
@@ -339,7 +358,6 @@ async function createLocalModel() {
 $("#ai-scope").addEventListener("change", () => { resetAi(); renderAiSources(); });
 $("#ai-workspace").addEventListener("change", resetAi);
 $("#ai-request").addEventListener("input", resetAi);
-$("#ai-tab-options").addEventListener("change", resetAi);
 $("#refresh-ai-sources").addEventListener("click", () => {
   resetAi();
   loadDashboard().catch((error) => setFeedback(error.message, true));
@@ -354,7 +372,7 @@ $("#preview-ai-input").addEventListener("click", async () => {
   try {
     const result = await chrome.runtime.sendMessage({
       type: "prepareAiAnalysis", scope: $("#ai-scope").value, workspaceId: $("#ai-workspace").value,
-      tabIds: [...$("#ai-tab-options").querySelectorAll("input:checked")].map((input) => Number(input.value)),
+      tabIds: aiSelection?.values() || [],
       request: $("#ai-request").value
     });
     if (version !== aiVersion) return;

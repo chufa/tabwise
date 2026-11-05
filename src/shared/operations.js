@@ -12,9 +12,9 @@ export function createOperationJournal({ read, write, undoItem }) {
     return next;
   };
   return {
-    record(label, items, status = "ready") {
+    record(label, items, status = "ready", batchTaskId) {
       return run(async () => {
-        const entry = { id: crypto.randomUUID(), label, items, status, createdAt: Date.now() };
+        const entry = { id: crypto.randomUUID(), label, items, status, createdAt: Date.now(), ...(batchTaskId ? { batchTaskId } : {}) };
         await write([entry, ...await read()].slice(0, 20));
         return entry;
       });

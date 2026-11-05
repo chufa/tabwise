@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { buildSessionSnapshot } from "../src/shared/session.js";
 import { createPageIndex } from "../src/shared/search.js";
+import { createSelection } from "../src/shared/selection.js";
 
 // Deterministic metadata fixtures; no website loads or real browser tab changes.
 for (const n of [300, 1000]) {
@@ -20,5 +21,14 @@ for (const n of [300, 1000]) {
   const activityMs = (performance.now() - at) / 10;
   at = performance.now();
   for (let round = 0; round < 20; round++) index.search("xingneng", 30);
-  console.log(JSON.stringify({ n, snapshotMs, indexMs, activityMs, searchMs: (performance.now() - at) / 20, compiled: index.stats().compiled }));
+  const searchMs = (performance.now() - at) / 20;
+  at = performance.now();
+  for (let round = 0; round < 20; round++) {
+    const selection = createSelection({ key: (tab) => tab.id, selected: true });
+    selection.setData(tabs);
+    selection.move(1);
+    selection.filter(`性能研究页面 ${n - 1}`);
+    selection.values();
+  }
+  console.log(JSON.stringify({ n, snapshotMs, indexMs, activityMs, searchMs, selectionMs: (performance.now() - at) / 20, compiled: index.stats().compiled }));
 }

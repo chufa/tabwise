@@ -50,6 +50,7 @@ export async function verifyExpansion({ context, control, fixture, extensionUrl,
   const added = await control.evaluate((base) => chrome.tabs.create({ url: `${base}/incremental-new`, active: false }), fixture.baseUrl);
   await waitForBrowserState(control, async (id) => (await chrome.tabs.get(id)).status === "complete", added.id);
   await card.getByRole("button", { name: "更新预览", exact: true }).click();
+  await control.locator(".workspace-editor details").filter({ hasText: "新增页面" }).locator("summary").click();
   await control.locator(".workspace-editor").getByText("incremental-new", { exact: true }).waitFor();
   await control.locator("[data-ws=confirm-update]").click();
   await waitForBrowserState(control, async (id) => (await chrome.runtime.sendMessage({ type: "getWorkspaceVersions", workspaceId: id })).length === 1, workspace.id);
@@ -85,7 +86,8 @@ export async function verifyExpansion({ context, control, fixture, extensionUrl,
   assert.deepEqual(candidates, [budgetTabs[0].id]);
   await control.evaluate((id) => chrome.tabs.update(id, { active: true }), budgetTabs[0].id);
   await control.locator("[data-budget=confirm]").click();
-  await control.locator(".budget-result").getByText("已休眠 0 页 · 跳过 1 页", { exact: true }).waitFor();
+  await control.locator(".budget-result").getByText("预算回收任务已创建，可在统一任务中心查看结果、停止或重试。", { exact: true }).waitFor();
+  await waitForBrowserState(control, async () => (await chrome.runtime.sendMessage({ type: "getTasks" })).some((task) => task.kind === "budget" && task.status === "completed" && task.skipped === 1));
   assert.equal((await control.evaluate((id) => chrome.tabs.get(id), budgetTabs[0].id)).url, budgetTabs[0].url);
   // A fresh safe preview successfully suspends via the same guarded path.
   await control.bringToFront();

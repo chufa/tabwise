@@ -15,10 +15,12 @@ import { resolveSavedResult, sourceState } from "../shared/restoration.js";
 import { rotationBatch, mapConcurrent, mergeHeapSamples } from "../shared/scanning.js";
 import { editWorkspace, mergeWorkspaces } from "../shared/workspaces.js";
 import { createReviewRunner } from "../shared/review-runner.js";
-import { buildSessionSnapshot, compareSnapshots, sanitizeSavedSnapshot } from "../shared/session.js";
+import { buildSessionSnapshot, compareSnapshots } from "../shared/session.js";
 import { createPageTracker } from "./page-tracker.js";
 import { createWorkspaceUpdates } from "./workspace-updates.js";
 import { buildBudget, updateHeapHistory } from "../shared/budget.js";
+import { createBackupManager } from "./backup.js";
+import { createBatchRunner } from "../shared/batch.js";
 
 const extensionOrigin = chrome.runtime.getURL("").replace(/\/$/, "");
 const pageTracker = createPageTracker(extensionOrigin);
@@ -41,7 +43,7 @@ function stateChanged(indexChanged = true) {
 }
 chrome.storage.onChanged?.addListener((changes) => {
   const indexKeys = ["workspaces", "recoveryCheckpoints", "recentSuspensions", "closedPages", "suspensionRecords", "suspensionRestoreRecords", "lastActivity", "settings"];
-  const displayKeys = [...indexKeys, "resourceSnapshots", "resourceReviews", "operationJournal", "restoreTasks", "workspaceBindings"];
+  const displayKeys = [...indexKeys, "resourceSnapshots", "resourceReviews", "operationJournal", "restoreTasks", "batchTasks", "workspaceBindings"];
   if (Object.keys(changes).some((key) => displayKeys.includes(key))) stateChanged(Object.keys(changes).some((key) => indexKeys.includes(key)));
 });
 const tabQueues = new Map();
@@ -60,12 +62,127 @@ const restorer = createRestorer((id) => runOperation(async () => {
   else await updateWorkspace(id, { lastOpenedAt: Date.now() });
 }));
 const workspaceUpdates = createWorkspaceUpdates(currentSessionSnapshot, (workspace, update) => updateWorkspaceOperation(workspace, update, journal));
+const backups = createBackupManager(sanitizeSettings);
 const reviewRunner = createReviewRunner({ read: getResourceReviews, write: saveResourceReviews, execute: executeResourceReview });
 reviewRunner.ready.catch(console.error);
 let resourceQueue = Promise.resolve();
 let scheduleQueue = Promise.resolve();
 const resourceVersions = new Map();
 const resourceEpoch = crypto.randomUUID();
+const batchRunner = createBatchRunner({
+  read: async () => (await chrome.storage.session.get("batchTasks")).batchTasks || [],
+  write: (batchTasks) => chrome.storage.session.set({ batchTasks }),
+  execute: executeBatchItem,
+  finalize: finalizeBatch
+});
+batchRunner.ready.catch(console.error);
+async function finalizeBatch(task) {
+  if (task.operationId) return {};
+  const records = Object.values(await getRecords()).filter((record) => record.reason === `batch:${task.id}` && record.state === SUSPENSION_STATES.SUSPENDED);
+  const items = task.kind === "group" ? task.results.flatMap((result) => result.undoItems || []).filter((item) => item.after)
+    : records.map((record) => ({ kind: "suspension", recordId: record.recordId }));
+  if (!items.length) return {};
+  const entry = await runOperation(async () => {
+    const existing = (await getOperations()).find((item) => item.batchTaskId === task.id);
+    return existing || journal.record(task.name, items, "ready", task.id);
+  });
+  return { operationId: entry.id };
+}
+async function batchBlock(tab, settings, expected) {
+  if (expected.budget) return budgetBlock(tab, settings, expected);
+  if (tab.incognito || tab.url !== expected.url || (resourceVersions.get(tab.id) || 0) !== expected.revision) return "页面已变化。";
+  const [protection, activity] = await Promise.all([getProtectionStates(), getActivity()]);
+  return (expected.group
+    ? directSuspensionBlockReason(tab, extensionOrigin) || (tab.pinned || tab.audible ? "页面受保护。" : "") || (tab.index !== expected.index || tab.groupId !== expected.groupId ? "页面布局已变化。" : "")
+    : settings.suspensionMode === SUSPENSION_MODES.SMART ? smartSuspensionBlockReason(tab, settings, extensionOrigin, protection[tab.id]) : suspensionBlockReason(tab, settings, extensionOrigin))
+    || (activity[tab.id] !== expected.lastActivity ? "页面最近已活动。" : "");
+}
+async function executeBatchItem(item, task, remember) {
+  if (task.kind !== "group") {
+    const result = await suspendTab(item.tabId, `batch:${task.id}`, false, item, true);
+    return { ...result, skipped: !result.ok && !result.error };
+  }
+  const tabs = await Promise.all(item.pages.map((page) => chrome.tabs.get(page.tabId).catch(() => null)));
+  for (let i = 0; i < tabs.length; i++) {
+    if (!tabs[i] || tabs[i].windowId !== item.windowId) return { skipped: true, reason: "窗口或页面已变化。" };
+    const reason = await batchBlock(tabs[i], await getSettings(), item.pages[i]);
+    if (reason) return { skipped: true, reason };
+  }
+  return runOperation(() => groupOperation(item.pages.map((page) => page.tabId), item.title, {
+    async record(label, items) { await remember({ undoItems: items }); return { id: task.id }; },
+    async finish(id, items) { await remember({ undoItems: items }); }
+  }));
+}
+async function startBatchSuspend(sender) {
+  const [tabs, activity] = await Promise.all([chrome.tabs.query(sender?.tab?.windowId ? { windowId: sender.tab.windowId } : { currentWindow: true }), getActivity()]);
+  return batchRunner.start({ name: "批量休眠", kind: "suspend", items: tabs.filter((tab) => Number.isInteger(tab.id)).map((tab) => ({
+    tabId: tab.id, title: tab.title, url: tab.url, revision: resourceVersions.get(tab.id) || 0, lastActivity: activity[tab.id]
+  })) });
+}
+async function groupItems(message) {
+  const ids = [...new Set(message.tabIds || [])].filter(Number.isInteger);
+  if (ids.length > 5000) throw new Error("每项分组任务最多包含 5000 页。");
+  const [tabs, activity] = await Promise.all([Promise.all(ids.map((id) => chrome.tabs.get(id).catch(() => null))), getActivity()]);
+  const windows = new Map();
+  for (const tab of tabs.filter(Boolean)) {
+    if (!windows.has(tab.windowId)) windows.set(tab.windowId, []);
+    windows.get(tab.windowId).push({ tabId: tab.id, url: tab.url, group: true, groupId: tab.groupId, index: tab.index, revision: resourceVersions.get(tab.id) || 0, lastActivity: activity[tab.id] });
+  }
+  const title = String(message.title || "Related tabs").slice(0, 80);
+  return [...windows].filter(([, pages]) => pages.length >= 2).map(([windowId, pages]) => ({
+    windowId, pages, size: pages.length, title
+  }));
+}
+async function startBatchGroup(message) {
+  const items = await groupItems(message);
+  return batchRunner.start({ name: `批量分组 · ${String(message.title || "Related tabs").slice(0, 80)}`, kind: "group", items });
+}
+async function prepareBatch(message, sender) {
+  if (!sender.documentId) throw new Error("请从 TabWise 界面预览批量操作。");
+  let pages;
+  if (message.kind === "group") {
+    const items = await groupItems(message);
+    pages = items.flatMap((item) => item.pages.map((page) => ({ ...page, title: page.url, windowId: item.windowId })));
+  } else {
+    const [tabs, settings, activity] = await Promise.all([chrome.tabs.query(sender.tab?.windowId ? { windowId: sender.tab.windowId } : { currentWindow: true }), getSettings(), getActivity()]);
+    pages = [];
+    for (const tab of tabs) {
+      const page = { tabId: tab.id, title: tab.title, url: tab.url, windowId: tab.windowId, revision: resourceVersions.get(tab.id) || 0, lastActivity: activity[tab.id] };
+      if (!await batchBlock(tab, settings, page)) pages.push(page);
+    }
+  }
+  if (pages.length > 5000) throw new Error("批量预览最多包含 5000 页，请缩小范围。");
+  const preview = { id: crypto.randomUUID(), owner: sender.documentId, expiresAt: Date.now() + 5 * 60_000, kind: message.kind === "group" ? "group" : "suspend", title: String(message.title || "Related tabs").slice(0, 80), pages };
+  await queueStorage("session", async () => {
+    const { batchPreviews = [] } = await chrome.storage.session.get("batchPreviews");
+    await chrome.storage.session.set({ batchPreviews: [preview, ...batchPreviews.filter((item) => item.owner !== preview.owner && item.expiresAt > Date.now())].slice(0, 10) });
+  });
+  return { ok: true, previewId: preview.id, pages, kind: preview.kind };
+}
+async function startBatchPreview(message, sender) {
+  return queueStorage("session", async () => {
+    const { batchPreviews = [] } = await chrome.storage.session.get("batchPreviews");
+    const preview = batchPreviews.find((item) => item.id === message.previewId && item.owner === sender.documentId && item.expiresAt > Date.now());
+    if (!preview) throw new Error("预览已过期或已执行。");
+    if (!Array.isArray(message.tabIds) || !message.tabIds.length || message.tabIds.some((id) => !preview.pages.some((page) => page.tabId === id))) throw new Error("请从预览中选择页面。");
+    let items = preview.pages.filter((page) => message.tabIds.includes(page.tabId));
+    if (preview.kind === "group") {
+      const windows = new Map();
+      for (const page of items) { if (!windows.has(page.windowId)) windows.set(page.windowId, []); windows.get(page.windowId).push(page); }
+      items = [...windows].filter(([, pages]) => pages.length >= 2).map(([windowId, pages]) => ({ windowId, pages, size: pages.length, title: preview.title }));
+    }
+    const result = await batchRunner.start({ kind: preview.kind, name: preview.kind === "group" ? `批量分组 · ${preview.title}` : "批量休眠", items });
+    await chrome.storage.session.set({ batchPreviews: batchPreviews.filter((item) => item.id !== preview.id) });
+    return result;
+  });
+}
+const publicTask = ({ results, ...task }) => task;
+async function taskDetail(message) {
+  const batch = (await batchRunner.list()).find((task) => task.id === message.taskId);
+  if (!batch) return restorer.detail(message.taskId, message.offset);
+  const offset = Math.max(0, Math.floor(Number(message.offset) || 0));
+  return { ...publicTask(batch), ok: true, itemTotal: batch.results.length, results: batch.results.slice(offset, offset + 50) };
+}
 function runResource(work) {
   const next = resourceQueue.catch(() => {}).then(work);
   resourceQueue = next;
@@ -376,12 +493,12 @@ async function budgetBlock(tab, settings, expected) {
     || smartSuspensionBlockReason(tab, settings, extensionOrigin, protection[tab.id])
     || (activity[tab.id] !== expected.lastActivity || !isIdleLongEnough(activity, tab.id, settings.idleMinutes * 60_000) ? "页面最近已活动。" : "");
 }
-async function suspendTab(tabId, reason = "manual", allowProtected = false, expected) {
+async function suspendTab(tabId, reason = "manual", allowProtected = false, expected, aggregate = false) {
   return runForTab(tabId, async () => {
     let recordId;
     try {
       const [settings, tab] = await Promise.all([getSettings(), chrome.tabs.get(tabId)]);
-      const blockReason = expected ? await budgetBlock(tab, settings, expected) : allowProtected
+      const blockReason = expected ? await batchBlock(tab, settings, expected) : allowProtected
         ? directSuspensionBlockReason(tab, extensionOrigin)
         : suspensionBlockReason(tab, settings, extensionOrigin);
       if (blockReason) return { ok: false, reason: blockReason };
@@ -400,7 +517,7 @@ async function suspendTab(tabId, reason = "manual", allowProtected = false, expe
       await putRecord(record);
 
       const freshTab = await chrome.tabs.get(tabId);
-      const freshBlock = expected ? await budgetBlock(freshTab, await getSettings(), expected) : "";
+      const freshBlock = expected ? await batchBlock(freshTab, await getSettings(), expected) : "";
       if (freshTab.url !== tab.url || freshTab.active || freshBlock) {
         await removeRecord(recordId);
         return { ok: false, reason: "Tab changed before suspension" };
@@ -422,11 +539,11 @@ async function suspendTab(tabId, reason = "manual", allowProtected = false, expe
       const suspendedRecord = { ...record, mode, state: SUSPENSION_STATES.SUSPENDED };
       await putRecord(suspendedRecord);
       await addRecentSuspension(suspendedRecord);
-      await journal.record(`休眠 · ${suspendedRecord.title}`, [{ kind: "suspension", recordId }]).catch(console.error);
+      if (!aggregate) await journal.record(`休眠 · ${suspendedRecord.title}`, [{ kind: "suspension", recordId }]).catch(console.error);
       return { ok: true, recordId };
     } catch (error) {
       if (recordId) await removeRecord(recordId);
-      return { ok: false, reason: error.message || "休眠操作失败" };
+      return { ok: false, error: true, reason: error.message || "休眠操作失败" };
     }
   });
 }
@@ -626,7 +743,7 @@ async function prepareBudgetReclaim(sender) {
   });
   return { ok: true, previewId: preview.id, pages };
 }
-async function confirmBudgetReclaim(message, sender) {
+async function confirmBudgetReclaim(message, sender, wait = true) {
   const preview = await queueStorage("session", async () => {
     const { budgetPreviews = [] } = await chrome.storage.session.get("budgetPreviews");
     const item = budgetPreviews.find((item) => item.id === message.previewId && item.owner === sender.documentId && item.expiresAt > Date.now());
@@ -635,12 +752,9 @@ async function confirmBudgetReclaim(message, sender) {
     await chrome.storage.session.set({ budgetPreviews: budgetPreviews.filter((page) => page.id !== item.id) });
     return item;
   });
-  const results = [];
-  for (const page of preview.pages.filter((page) => message.tabIds.includes(page.tabId))) {
-    const result = await suspendTab(page.tabId, "budget", false, page);
-    results.push({ tabId: page.tabId, title: page.title, ...result });
-  }
-  return { ok: true, count: results.filter((item) => item.ok).length, results };
+  const started = await batchRunner.start({ name: "资源预算回收", kind: "budget", items: preview.pages.filter((page) => message.tabIds.includes(page.tabId)).map((page) => ({ ...page, budget: true })) });
+  if (!wait) return started;
+  return { ...await batchRunner.wait(started.taskId), ok: true };
 }
 
 function buildPageMemory(dashboard, workspaces, checkpoints, recent, closed = []) {
@@ -978,9 +1092,8 @@ async function getSuspendedRecordForSender(recordId, sender) {
 }
 
 async function suspendEligibleTabsInCurrentWindow() {
-  const tabs = await chrome.tabs.query({ currentWindow: true });
-  const results = await Promise.all(tabs.map((tab) => tab.id ? suspendTab(tab.id, "batch") : null));
-  return { ok: true, count: results.filter((result) => result?.ok).length };
+  const task = await startBatchSuspend();
+  return { ...await batchRunner.wait(task.taskId), ok: true };
 }
 
 async function pauseAutomation(minutes) {
@@ -1018,34 +1131,6 @@ async function restoreTab(tabId) {
   } catch {
     return { ok: false, reason: "标签页已关闭或不可用" };
   }
-}
-
-function backupWorkspace(workspace) {
-  const snapshot = sanitizeSavedSnapshot(workspace);
-  return {
-    id: crypto.randomUUID(),
-    name: String(workspace?.name || "导入的工作区").trim().slice(0, 80) || "导入的工作区",
-    createdAt: Number.isFinite(workspace?.createdAt) ? workspace.createdAt : Date.now(),
-    pinned: Boolean(workspace?.pinned),
-    archived: Boolean(workspace?.archived),
-    archivedAt: Number.isFinite(workspace?.archivedAt) ? workspace.archivedAt : 0,
-    lastOpenedAt: Number.isFinite(workspace?.lastOpenedAt) && workspace.lastOpenedAt <= Date.now() ? workspace.lastOpenedAt : 0,
-    ...snapshot
-  };
-}
-
-async function importBackup(backup) {
-  if (!backup || backup.schemaVersion !== 1 || !Array.isArray(backup.workspaces)) {
-    return { ok: false, reason: "备份文件格式不受支持" };
-  }
-  if (backup.workspaces.length > 20) return { ok: false, reason: "备份包含超过 20 个工作区，请先整理。" };
-  const workspaces = backup.workspaces.map(backupWorkspace).filter((workspace) => workspace.tabs.length);
-  validateWorkspaceCapacity([...(await getAllWorkspaces()), ...workspaces]);
-  if (backup.settings && typeof backup.settings === "object") {
-    await changeSettings((settings) => sanitizeSettings(settings, backup.settings));
-  }
-  for (const workspace of workspaces.reverse()) await addWorkspace(workspace);
-  return { ok: true, count: workspaces.length };
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -1193,6 +1278,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     getDashboard,
     prepareBudgetReclaim: () => prepareBudgetReclaim(sender),
     confirmBudgetReclaim: () => confirmBudgetReclaim(message, sender),
+    startBudgetReclaim: () => confirmBudgetReclaim(message, sender, false),
+    startBatchSuspend: () => startBatchSuspend(sender),
+    prepareBatch: () => prepareBatch(message, sender),
+    startBatchPreview: () => startBatchPreview(message, sender),
+    startBatchGroup: () => startBatchGroup(message),
+    getTasks: async () => [...(await batchRunner.list()).map(publicTask), ...(await restorer.list()).map((task) => ({ ...task, kind: "restore" }))].sort((a, b) => b.createdAt - a.createdAt),
+    getTask: () => taskDetail(message),
+    stopTask: async () => (await batchRunner.list()).some((task) => task.id === message.taskId) ? batchRunner.stop(message.taskId) : restorer.stop(message.taskId),
+    retryTask: async () => (await batchRunner.list()).some((task) => task.id === message.taskId) ? batchRunner.retry(message.taskId) : restorer.retry(message.taskId),
     getResourceDiagnostics,
     getOperations: async () => (await getOperations()).map(({ id, label, createdAt, status, results, items }) => ({ id, label, createdAt, status, results, count: items.length })),
     undoOperation: () => runOperation(() => journal.undo(message.operationId)),
@@ -1242,14 +1336,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     runResourceReview: () => runResourceReview("manual"),
     restoreRecentSuspension: () => restoreRecentSuspension(message.recordId),
     restoreCheckpoint: () => restoreCheckpoint(message.checkpointId),
-    exportBackup: async () => ({
-      schemaVersion: 1,
-      exportedAt: Date.now(),
-      settings: await getSettings(),
-      workspaces: await getWorkspaces()
-    }),
+    exportBackup: () => backups.export(),
+    prepareBackupImport: () => backups.prepare(message.backup, sender),
+    confirmBackupImport: async () => {
+      const result = await runOperation(() => backups.confirm(message, sender));
+      if (message.includeSettings) await scheduleResourceReview();
+      return result;
+    },
     importBackup: async () => {
-      const result = await runOperation(() => importBackup(message.backup));
+      const result = await runOperation(() => backups.import(message.backup));
       if (result.ok) await scheduleResourceReview();
       return result;
     },
@@ -1317,14 +1412,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return { ok: true, archived: updated.archived };
     }),
     groupTabs: async () => {
-      const requestedIds = [...new Set(message.tabIds || [])].filter(Number.isInteger);
-      const tabs = await Promise.all(requestedIds.map((tabId) => chrome.tabs.get(tabId).catch(() => null)));
-      const byWindow = new Map();
-      for (const tab of tabs.filter((tab) => tab && /^https?:/.test(tab.url || ""))) {
-        if (!byWindow.has(tab.windowId)) byWindow.set(tab.windowId, []);
-        byWindow.get(tab.windowId).push(tab.id);
-      }
-      return runOperation(() => groupOperation([...byWindow.values()].flat(), message.title?.slice(0, 80) || "Related tabs", journal));
+      const task = await startBatchGroup(message);
+      return { ...await batchRunner.wait(task.taskId), ok: true };
     }
   };
 

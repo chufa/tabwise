@@ -15,19 +15,36 @@ export function createRefresh(work) {
 
 export function updateHTML(host, html) {
   if (host.innerHTML === html) return;
-  const focused = host.contains(document.activeElement) ? document.activeElement : null;
-  const controls = [...host.querySelectorAll("input, select, button")];
-  const identity = (element) => JSON.stringify([element.tagName, element.id, element.name, element.getAttribute("value"), { ...element.dataset }]);
-  const key = focused && identity(focused);
-  const scroll = [...host.querySelectorAll("*")].filter((element) => element.scrollTop).map((element) => [element.className, element.scrollTop]);
-  const top = host.scrollTop;
-  host.innerHTML = html;
-  host.scrollTop = top;
-  for (const [name, value] of scroll) {
-    const element = [...host.querySelectorAll("*")].find((item) => item.className === name);
-    if (element) element.scrollTop = value;
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  const key = (node) => node.nodeType === 1 ? node.id || node.getAttribute("data-key") || node.getAttribute("data-task-id") : null;
+  function morph(parent, incoming) {
+    const old = [...parent.childNodes], keyed = new Map(old.filter(key).map((node) => [key(node), node]));
+    let cursor = parent.firstChild;
+    for (const next of [...incoming.childNodes]) {
+      const id = key(next);
+      let current = id ? keyed.get(id) : cursor && !key(cursor) ? cursor : null;
+      if (!current || current.nodeType !== next.nodeType || current.nodeName !== next.nodeName) current = next.cloneNode(true);
+      if (current !== cursor) parent.insertBefore(current, cursor);
+      if (current.nodeType === 1) {
+        const value = current.value, valueAttr = current.getAttribute("value");
+        const expanded = current.tagName === "DETAILS" && current.open;
+        for (const attr of [...current.attributes]) if (!next.hasAttribute(attr.name)) current.removeAttribute(attr.name);
+        for (const attr of [...next.attributes]) if (current.getAttribute(attr.name) !== attr.value) current.setAttribute(attr.name, attr.value);
+        morph(current, next);
+        if (current.tagName === "DETAILS") current.open = expanded;
+        if (current.tagName === "INPUT") {
+          if (["checkbox", "radio"].includes(current.type)) current.checked = next.checked;
+          else if (valueAttr === next.getAttribute("value") || document.activeElement === current) current.value = value;
+          else current.value = next.value;
+        }
+        if (current.tagName === "SELECT" && [...current.options].some((option) => option.value === value)) current.value = value;
+      } else if (current.nodeValue !== next.nodeValue) current.nodeValue = next.nodeValue;
+      cursor = current.nextSibling;
+    }
+    while (cursor) { const next = cursor.nextSibling; cursor.remove(); cursor = next; }
   }
-  if (key && controls.length) [...host.querySelectorAll("input, select, button")].find((element) => identity(element) === key)?.focus({ preventScroll: true });
+  morph(host, template.content);
 }
 
 export function connectLiveUI(refresh, onError) {

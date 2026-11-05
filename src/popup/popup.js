@@ -5,6 +5,8 @@ import { createRefresh, connectLiveUI, updateHTML } from "../shared/live-ui.js";
 import { createSessionUI } from "../shared/session-ui.js";
 import { createTaskUI } from "../shared/task-ui.js";
 import { createBudgetUI } from "../shared/budget-ui.js";
+import { createBatchUI } from "../shared/batch-ui.js";
+import { createPalette } from "../shared/palette.js";
 
 const $ = (selector) => document.querySelector(selector);
 const state = { data: null, filter: "all", sort: "recent", search: "", workspaceSearch: "", workspaces: [], recent: [], checkpoints: [], expandedSuggestions: new Set(), tabMessages: new Map() };
@@ -16,6 +18,8 @@ const workspaceUI = createWorkspaceUI($("#workspaces"), restoreUI, setFeedback, 
 const sessionUI = createSessionUI($("#session-tools"), restoreUI, setFeedback, render);
 const taskUI = createTaskUI($("#restore-tasks"), setFeedback, render);
 const budgetUI = createBudgetUI($("#resource-budget"), setFeedback, render);
+const batchUI = createBatchUI(setFeedback, render);
+createPalette({ feedback: setFeedback, refresh: render, restoreUI, batchUI, getDashboard: () => state.data, saveButton: $("#toggle-workspace-form") });
 
 function formatRelativeTime(timestamp) {
   if (!timestamp) return "刚开始追踪";
@@ -85,7 +89,7 @@ function row({ title, subtitle, action = "", secondaryAction = "", tertiaryActio
   const actionId = action?.id || id;
   const secondaryActionId = secondaryAction?.id || id;
   const tertiaryActionId = tertiaryAction?.id || id;
-  return `<div class="row">
+  return `<div class="row" data-key="${escapeHtml(`${action?.type || ""}:${id}`)}">
     <div class="row-main"><strong title="${escapeHtml(title)}">${escapeHtml(title)}</strong><span title="${escapeHtml(subtitle)}">${escapeHtml(subtitle)}</span></div>
     ${badge ? `<span class="status-badge ${badge === "休眠中" ? "resting" : ""}">${escapeHtml(badge)}</span>` : ""}
     ${action || secondaryAction || tertiaryAction ? `<div class="row-actions">${tertiaryAction ? `<button class="action-button" data-action="${tertiaryAction.type}" data-id="${escapeHtml(tertiaryActionId)}" type="button">${escapeHtml(tertiaryAction.label)}</button>` : ""}${secondaryAction ? `<button class="action-button" data-action="${secondaryAction.type}" data-id="${escapeHtml(secondaryActionId)}" type="button">${escapeHtml(secondaryAction.label)}</button>` : ""}${action ? `<button class="action-button" data-action="${action.type}" data-id="${escapeHtml(actionId)}"${tabData} type="button">${escapeHtml(action.label)}</button>` : ""}</div>` : ""}
@@ -301,11 +305,15 @@ document.body.addEventListener("click", async (event) => {
     renderSuggestions(state.data.organization);
     return;
   }
-  if (action === "group") result = await send({ type: "groupTabs", title: id, tabIds: JSON.parse(button.dataset.tabIds || "[]") });
+  if (action === "group") {
+    try { await batchUI.open("group", { title: id, tabIds: JSON.parse(button.dataset.tabIds || "[]") }); }
+    catch (error) { setFeedback(error.message, true); }
+    button.disabled = false; return;
+  }
   if (action === "suspend" || action === "direct-suspend") {
     state.tabMessages.set(Number(id), result?.ok ? "已进入休眠" : actionMessage(result?.reason));
   }
-  setFeedback(result?.ok ? action === "group" ? `已分组 ${result.count} 个标签页` : "操作已完成" : actionMessage(result?.reason), !result?.ok);
+  setFeedback(result?.ok ? action === "group" ? "分组任务已创建，可在任务中心查看进度" : "操作已完成" : actionMessage(result?.reason), !result?.ok);
   await render();
 });
 
@@ -328,11 +336,7 @@ $("#create-checkpoint").addEventListener("click", async () => {
   await render();
 });
 $("#suspend-eligible").addEventListener("click", async () => {
-  const eligible = state.data.summary.eligible;
-  if (!eligible || !window.confirm(`将休眠本窗口中 ${eligible} 个符合安全条件的标签页。是否继续？`)) return;
-  const result = await send({ type: "suspendEligibleTabs" });
-  setFeedback(result.ok ? `已休眠 ${result.count} 个标签页` : result.reason, !result.ok);
-  await render();
+  try { await batchUI.open(); } catch (error) { setFeedback(error.message, true); }
 });
 $("#tab-search").addEventListener("input", (event) => {
   state.search = event.target.value;

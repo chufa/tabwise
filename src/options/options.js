@@ -1,5 +1,6 @@
 import { escapeHtml } from "../shared/html.js";
 import { OLLAMA_PROBE_SCHEMA, validateOllamaProbe } from "../shared/ollama.js";
+import { BACKUP_LIMITS } from "../shared/backup.js";
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -125,27 +126,78 @@ $("#test-browser-model").addEventListener("click", async () => {
 });
 
 $("#export-backup").addEventListener("click", async () => {
+  try {
   const backup = await chrome.runtime.sendMessage({ type: "exportBackup" });
+  if (backup.ok === false) throw new Error(backup.reason);
   const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" }));
   const link = document.createElement("a");
   link.href = url;
   link.download = `tabwise-backup-${new Date().toISOString().slice(0, 10)}.json`;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-  $("#backup-feedback").textContent = "备份已导出";
+  $("#backup-feedback").textContent = `已导出 ${backup.integrity.counts.workspaces} 个工作区 · SHA-256 校验码已附带`;
+  } catch (error) { $("#backup-feedback").textContent = error.message; }
 });
 
+let backupPreviewId;
+let backupVersion = 0;
 $("#import-backup").addEventListener("change", async (event) => {
   const [file] = event.target.files;
   if (!file) return;
+  const version = ++backupVersion;
+  backupPreviewId = null;
+  $("#backup-preview").hidden = true;
   try {
+    if (file.size > BACKUP_LIMITS.bytes) throw new Error("备份大小超过 8 MiB 上限。");
     const backup = JSON.parse(await file.text());
-    const result = await chrome.runtime.sendMessage({ type: "importBackup", backup });
-    $("#backup-feedback").textContent = result.ok ? `已导入 ${result.count} 个工作区` : result.reason;
-  } catch {
-    $("#backup-feedback").textContent = "无法读取备份文件";
+    const result = await chrome.runtime.sendMessage({ type: "prepareBackupImport", backup });
+    if (version !== backupVersion) return;
+    if (!result.ok) throw new Error(result.reason);
+    backupPreviewId = result.previewId;
+    $("#backup-feedback").textContent = result.verified ? "完整性校验通过，等待确认导入。" : "旧版备份，请核对内容后导入。";
+    $("#backup-preview").innerHTML = `<h3>导入预览</h3>
+      <p>${result.counts.pages} 页 · ${result.counts.windows} 个窗口 · ${result.counts.versions} 个历史版本</p>
+      ${result.warnings.map((warning) => `<p>${escapeHtml(warning)}</p>`).join("")}
+      <fieldset><legend>选择工作区</legend>${result.workspaces.map((workspace) => `<label class="check"><input type="checkbox" data-backup-index="${workspace.index}" ${workspace.empty ? "disabled" : workspace.duplicate ? "" : "checked"}>
+      <span>${escapeHtml(workspace.name)} · ${workspace.pages} 页 · ${workspace.versions} 个版本${workspace.duplicate ? " · 内容相同，默认跳过" : workspace.conflict ? " · 名称或 ID 冲突，将保留副本" : ""}</span></label>`).join("")}</fieldset>
+      <label class="check"><input id="backup-copies" type="checkbox"><span>所选相同内容也保留副本</span></label>
+      <label class="check"><input id="backup-settings" type="checkbox"><span>同时恢复设置</span></label>
+      <div class="backup-actions"><button type="button" data-backup="confirm">确认导入</button><button type="button" data-backup="cancel">取消</button></div>`;
+    $("#backup-preview").hidden = false;
+  } catch (error) {
+    if (version === backupVersion) $("#backup-feedback").textContent = error instanceof SyntaxError ? "无法读取 JSON 备份文件。" : error.message;
   } finally {
     event.target.value = "";
   }
 });
-load();
+$("#backup-preview").addEventListener("click", async (event) => {
+  const action = event.target.closest("[data-backup]")?.dataset.backup;
+  if (!action) return;
+  if (action === "cancel") {
+    backupVersion++; backupPreviewId = null; $("#backup-preview").hidden = true;
+    $("#backup-feedback").textContent = "已取消导入"; return;
+  }
+  const current = backupVersion, previewId = backupPreviewId;
+  if (!previewId) return;
+  const indices = [...document.querySelectorAll("[data-backup-index]:checked")].map((input) => Number(input.dataset.backupIndex));
+  $("#backup-preview").querySelectorAll("input,button").forEach((input) => { input.disabled = true; });
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "confirmBackupImport", previewId, indices,
+      keepCopies: $("#backup-copies").checked, includeSettings: $("#backup-settings").checked });
+    if (current !== backupVersion) return;
+    if (!result.ok) throw new Error(result.reason);
+    backupPreviewId = null; $("#backup-preview").hidden = true;
+    $("#backup-feedback").textContent = `已导入 ${result.count} 个工作区，跳过 ${result.skipped} 个。`;
+    await load();
+  } catch (error) {
+    if (current === backupVersion) {
+      $("#backup-feedback").textContent = error.message;
+      $("#backup-preview").querySelectorAll("input,button").forEach((input) => { input.disabled = false; });
+    }
+  }
+});
+load().catch((error) => {
+  $("#saved").textContent = error?.message?.includes("Extension context invalidated")
+    ? "扩展刚刚更新，请刷新设置页。"
+    : "无法读取设置，请刷新后重试。";
+});

@@ -38,11 +38,11 @@ export function createBudgetUI(host, feedback, refresh) {
       } else if (preview) {
         const tabIds = [...pane.querySelectorAll("input:checked")].map((input) => Number(input.value));
         pane.querySelectorAll("input, button").forEach((input) => { input.disabled = true; });
-        const result = await chrome.runtime.sendMessage({ type: "confirmBudgetReclaim", previewId: preview.previewId, tabIds });
+        const result = await chrome.runtime.sendMessage({ type: "startBudgetReclaim", previewId: preview.previewId, tabIds });
         if (!result.ok) throw new Error(result.reason);
         preview = null;
-        pane.querySelector(".budget-result").innerHTML = `<p>已休眠 ${result.count} 页 · 跳过 ${result.results.length - result.count} 页</p><ul>${result.results.map((page) => `<li>${escapeHtml(page.title)}：${escapeHtml(page.ok ? "已休眠" : page.reason)}</li>`).join("")}</ul>`;
-        feedback(`预算回收完成，已休眠 ${result.count} 页`);
+        pane.querySelector(".budget-result").textContent = "预算回收任务已创建，可在统一任务中心查看结果、停止或重试。";
+        feedback("预算回收任务已创建");
         await refresh();
       }
     } catch (error) {

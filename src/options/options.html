@@ -124,12 +124,13 @@
       </section>
       <section class="backup-note">
         <h2>本地备份</h2>
-        <p>导出仅包含设置和保存的工作区，不包含当前打开的标签、Cookie、表单数据或休眠中的临时记录。导入会合并有效工作区，并恢复经过校验的休眠设置。</p>
+        <p>备份包含设置、工作区布局和最近 5 个历史版本。选择文件后先校验并预览，确认后一次性导入。大小上限 8 MiB，单个快照最多 5000 页。</p>
         <div class="backup-actions">
           <button id="export-backup" type="button">导出工作区备份</button>
           <label class="import-button" for="import-backup">导入备份<input id="import-backup" type="file" accept="application/json,.json"></label>
           <span id="backup-feedback" role="status"></span>
         </div>
+        <div id="backup-preview" hidden></div>
       </section>
     </main>
     <script type="module" src="options.js"></script>

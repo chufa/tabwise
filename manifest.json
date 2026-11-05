@@ -15,9 +15,6 @@
     "http://*/*",
     "https://*/*"
   ],
-  "optional_permissions": [
-    "processes"
-  ],
   "background": {
     "service_worker": "src/background/service-worker.js",
     "type": "module"

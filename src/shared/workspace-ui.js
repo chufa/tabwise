@@ -2,19 +2,20 @@ import { escapeHtml } from "./html.js";
 import { sourceState } from "./restoration.js";
 import { updateHTML } from "./live-ui.js";
 import { pageStatus, taskCounts, restoreStatus } from "./task-ui.js";
+import { createPagedList } from "./paged-ui.js";
 
 const send = (message) => chrome.runtime.sendMessage(message);
-const memberList = (pages, mode) => pages.map((page, index) => `<label class="saved-member">
-  <input type="checkbox" value="${index}" checked><span><strong>${escapeHtml(page.title || page.url)}</strong>
-  <small>${escapeHtml(page.url)}${mode === "restore" ? ` · 窗口 ${(page.windowKey ?? 0) + 1}${page.pinned ? " · 固定" : ""}${page.status === "suspended" ? " · 休眠" : ""}${page.existing ? " · 已打开（将跳过）" : ""}` : ""}</small></span></label>`).join("");
+const memberBody = (page) => `<span><strong>${escapeHtml(page.title || page.url)}</strong>
+  <small>${escapeHtml(page.url)} · 窗口 ${(page.windowKey ?? 0) + 1}${page.pinned ? " · 固定" : ""}${page.status === "suspended" ? " · 休眠" : ""}${page.existing ? " · 已打开（将跳过）" : ""}</small></span>`;
 
 export function createRestoreUI(host, feedback, refresh) {
   let preview;
   let taskId;
   let version = 0;
+  let members;
   const count = () => {
     if (!preview) return;
-    const selected = [...host.querySelectorAll(".saved-members input:checked")];
+    const selected = members.values();
     host.querySelector("[data-restore=confirm]").disabled = selected.length === 0;
     host.querySelector(".selection-count").textContent = `已选 ${selected.length} / ${preview.pages.length} 页`;
   };
@@ -25,13 +26,13 @@ export function createRestoreUI(host, feedback, refresh) {
     const action = button.dataset.restore;
     if (action === "cancel") { version++; preview = null; host.hidden = true; return; }
     if (action === "all" || action === "none") {
-      host.querySelectorAll(".saved-members input").forEach((input) => { input.checked = action === "all"; });
+      members.selectAll(action === "all");
       count();
       return;
     }
     if (action !== "confirm" || !preview) return;
     const current = version;
-    const indices = [...host.querySelectorAll(".saved-members input:checked")].map((input) => Number(input.value));
+    const indices = members.values();
     const skipExisting = host.querySelector(".skip-existing").checked;
     const restoreLayout = host.querySelector(".restore-layout")?.checked || false;
     host.querySelectorAll("button, input").forEach((input) => { input.disabled = true; });
@@ -78,14 +79,16 @@ export function createRestoreUI(host, feedback, refresh) {
       host.innerHTML = `<h2>选择恢复 · ${escapeHtml(result.name)}</h2>
         <p class="saved-hint">只恢复勾选的页面。每批最多 5 页，当前标签保持打开。</p>
         <div class="saved-actions"><button type="button" data-restore="all">全选</button><button type="button" data-restore="none">全不选</button><span class="selection-count"></span></div>
-        <fieldset class="saved-members"><legend>要恢复的页面</legend>${memberList(result.pages, "restore")}</fieldset>
+        <fieldset class="saved-members"><legend>要恢复的页面</legend><div class="restore-page-list"></div></fieldset>
         <label class="saved-switch"><input class="skip-existing" type="checkbox" checked>跳过已打开的页面（所有窗口）</label>
         ${result.hasLayout ? `<label class="saved-switch"><input class="restore-layout" type="checkbox" checked>新建窗口恢复布局（仅新打开的页面）</label>
         <p class="saved-hint">快照含 ${result.windowCount} 个窗口、固定页和标签组。休眠页保持休眠；取消布局恢复后，网页会在当前窗口加载。</p>` : ""}
         <div class="saved-actions"><button type="button" data-restore="confirm">恢复所选页面</button><button type="button" data-restore="cancel">取消</button></div>
         <div class="restore-result" role="status"></div>`;
       host.hidden = false;
-      if (options.indices) host.querySelectorAll(".saved-members input").forEach((input) => { input.checked = options.indices.includes(Number(input.value)); });
+      members = createPagedList(host.querySelector(".restore-page-list"), { selected: true, render: memberBody, onChange: count });
+      members.setData(result.pages.map((page, index) => ({ ...page, index })));
+      if (options.indices) members.setValues(options.indices);
       count();
       host.scrollIntoView({ block: "nearest", behavior: "instant" });
       host.querySelector("[data-restore=all]").focus({ preventScroll: true });
@@ -99,17 +102,18 @@ export function createWorkspaceUI(host, restoreUI, feedback, refresh) {
   let filter = "";
   let busy = 0;
   let bindings = {};
+  let editorMembers;
   const selected = new Set();
   host.innerHTML = `<div class="workspace-list"></div>
     <form class="merge-workspaces" hidden><label>合并后的名称<input name="merge-name" maxlength="80" required placeholder="新工作区名称"></label>
-    <p class="saved-hint">合并所选工作区并去重，原工作区保留。</p><button type="submit">合并所选工作区</button></form>
+    <p class="saved-hint">合并所选工作区；布局快照保留窗口和重复页面，原工作区保留。</p><button type="submit">合并所选工作区</button></form>
     <div class="workspace-editor" hidden></div>
     <details class="workspace-trash"><summary>回收站 <span></span></summary><p class="saved-hint">仅移除保存的快照，网页标签保持打开。最多保留 20 个，可手动恢复。</p><div class="trash-list"></div></details>`;
   const draw = () => {
     if (busy) return;
     for (const id of selected) if (!workspaces.some((item) => item.id === id)) selected.delete(id);
     const visible = workspaces.filter((item) => !filter || `${item.name} ${item.tabs.map((tab) => `${tab.title} ${tab.url}`).join(" ")}`.toLowerCase().includes(filter));
-    updateHTML(host.querySelector(".workspace-list"), visible.map((workspace) => `<article class="saved-workspace">
+    updateHTML(host.querySelector(".workspace-list"), visible.map((workspace) => `<article class="saved-workspace" data-key="${escapeHtml(workspace.id)}">
       <div class="saved-workspace-heading"><input type="checkbox" data-ws-select="${escapeHtml(workspace.id)}" aria-label="选择 ${escapeHtml(workspace.name)}" ${selected.has(workspace.id) ? "checked" : ""}>
       <div><strong>${escapeHtml(workspace.name)}</strong><small>${workspace.tabs.length} 页 · ${workspace.archived ? "已归档" : workspace.pinned ? "已固定" : "已保存"}${workspace.lastOpenedAt ? ` · 打开于 ${new Date(workspace.lastOpenedAt).toLocaleDateString()}` : ""}${Object.entries(bindings).filter(([, id]) => id === workspace.id).map(([id]) => ` · 关联窗口 ${id}`).join("")}</small></div></div>
       <div class="saved-actions" data-id="${escapeHtml(workspace.id)}">
@@ -121,7 +125,7 @@ export function createWorkspaceUI(host, restoreUI, feedback, refresh) {
       </div></article>`).join("") || '<p class="saved-hint">暂无匹配的工作区。保存当前窗口后可在这里恢复和编辑。</p>');
     host.querySelector(".merge-workspaces").hidden = selected.size < 2;
     host.querySelector(".workspace-trash summary span").textContent = `(${trash.length})`;
-    updateHTML(host.querySelector(".trash-list"), trash.map((workspace) => `<article class="saved-workspace">
+    updateHTML(host.querySelector(".trash-list"), trash.map((workspace) => `<article class="saved-workspace" data-key="${escapeHtml(workspace.id)}">
       <strong>${escapeHtml(workspace.name)}</strong><small>${workspace.tabs.length} 页 · ${new Date(workspace.deletedAt).toLocaleDateString()} 移入</small>
       <div class="saved-actions" data-id="${escapeHtml(workspace.id)}"><button type="button" data-ws="restore-trash">恢复工作区</button><button type="button" data-ws="delete">永久删除</button></div></article>`).join("") || '<p class="saved-hint">回收站为空。</p>');
   };
@@ -166,20 +170,23 @@ export function createWorkspaceUI(host, restoreUI, feedback, refresh) {
       if (action === "update") {
         const result = await send({ type: "prepareWorkspaceUpdate", workspaceId: id, versionId: button.dataset.versionId });
         if (!result.ok) throw new Error(result.reason);
-        const changes = (items, label) => `<h4>${label} (${items.length})</h4><ul>${items.slice(0, 50).map((page) => `<li>${escapeHtml(page.title || page.url)}</li>`).join("")}</ul>${items.length > 50 ? "<p>仅展示前 50 页。</p>" : ""}`;
+        const changes = (items, label, type) => `<details><summary>${label} (${items.length})</summary><div data-changes="${type}"></div></details>`;
         editor.innerHTML = `<h3>${result.rollback ? "回退" : "更新"}预览 · ${escapeHtml(result.name)}</h3><p class="saved-hint">新增 ${result.added.length} · 移除 ${result.removed.length} · 布局或标题变化 ${result.changed.length}。确认后保存旧版本，网页保持打开。</p>
-          ${changes(result.added, "新增页面")}${changes(result.removed, "移除页面")}${changes(result.changed, "变化页面")}
+          ${changes(result.added, "新增页面", "added")}${changes(result.removed, "移除页面", "removed")}${changes(result.changed, "变化页面", "changed")}
           <div class="saved-actions" data-id="${escapeHtml(id)}"><button type="button" data-ws="confirm-update" data-preview-id="${escapeHtml(result.previewId)}">确认${result.rollback ? "回退" : "更新"}</button><button type="button" data-ws="cancel-edit">取消</button></div>`;
         editor.hidden = false;
+        for (const type of ["added", "removed", "changed"]) createPagedList(editor.querySelector(`[data-changes="${type}"]`), { selectable: false }).setData(result[type].map((page, index) => ({ ...page, index })));
         editor.scrollIntoView({ block: "nearest" });
         return;
       }
       if (action === "edit") {
         editor.innerHTML = `<form data-id="${escapeHtml(id)}" data-signature="${escapeHtml(sourceState(workspace))}">
           <h3>编辑工作区</h3><label>工作区名称<input name="workspace-name" value="${escapeHtml(workspace.name)}" maxlength="80" required></label>
-          <fieldset class="saved-members"><legend>保留的页面</legend>${memberList(workspace.tabs)}</fieldset>
+          <fieldset class="saved-members"><legend>保留的页面</legend><div class="editor-page-list"></div></fieldset>
           <div class="saved-actions"><button type="submit">保存修改</button><button type="button" data-ws="cancel-edit">取消</button></div><p class="editor-feedback" role="status"></p></form>`;
         editor.hidden = false;
+        editorMembers = createPagedList(editor.querySelector(".editor-page-list"), { selected: true });
+        editorMembers.setData(workspace.tabs.map((page, index) => ({ ...page, index })));
         editor.scrollIntoView({ block: "nearest", behavior: "instant" });
         editor.querySelector("input").focus({ preventScroll: true });
         return;
@@ -203,7 +210,7 @@ export function createWorkspaceUI(host, restoreUI, feedback, refresh) {
         selected.clear(); form.reset(); draw();
       } else {
         await finish(await send({ type: "editWorkspace", workspaceId: form.dataset.id, signature: form.dataset.signature, name: form.elements["workspace-name"].value,
-          indices: [...form.querySelectorAll(".saved-members input:checked")].map((input) => Number(input.value)) }));
+          indices: editorMembers.values() }));
         host.querySelector(".workspace-editor").hidden = true;
       }
     } catch (error) {

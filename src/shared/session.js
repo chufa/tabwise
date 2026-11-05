@@ -1,17 +1,21 @@
 import { sameOperationState } from "./operations.js";
 
 export function sanitizeSavedSnapshot(source) {
-  const pages = (Array.isArray(source?.tabs) ? source.tabs : []).filter((page) => page && !page.incognito && /^https?:\/\//.test(page.url || "")).slice(0, 200);
+  const input = Array.isArray(source?.tabs) ? source.tabs : [];
+  if (input.length > 5000) throw new Error("单个快照超过 5000 页上限，请拆分后导入。");
+  const pages = input.filter((page) => page && !page.incognito && /^https?:\/\//.test(page.url || ""));
   const title = (value) => String(value || "").slice(0, 300);
   if (source?.schemaVersion !== 2) return { tabs: pages.map((page) => ({ title: title(page.title), url: page.url })) };
   const ordinal = (value) => Number.isInteger(value) && value >= 0 && value < 10_000 ? value : 0;
   const colors = new Set(["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"]);
-  const groups = (Array.isArray(source.groups) ? source.groups : []).filter((group) => group && typeof group.key === "string" && group.key.length <= 80).slice(0, 200)
+  if (Array.isArray(source.groups) && source.groups.length > 5000) throw new Error("快照标签组超过 5000 个上限。");
+  const groups = (Array.isArray(source.groups) ? source.groups : []).filter((group) => group && typeof group.key === "string" && group.key.length <= 80)
     .map((group, id) => ({ id, key: group.key, windowId: ordinal(group.windowKey), title: title(group.title), color: colors.has(group.color) ? group.color : "grey", collapsed: Boolean(group.collapsed) }));
+  const groupMap = new Map(groups.map((group) => [`${group.windowId}:${group.key}`, group.id]));
   return buildSessionSnapshot(pages.map((page, id) => ({
     id, url: page.url, title: title(page.title), windowId: ordinal(page.windowKey), index: ordinal(page.index),
     pinned: Boolean(page.pinned), active: Boolean(page.active), discarded: page.status === "suspended",
-    groupId: groups.find((group) => group.key === page.groupKey && group.windowId === ordinal(page.windowKey))?.id ?? -1
+    groupId: groupMap.get(`${ordinal(page.windowKey)}:${page.groupKey}`) ?? -1
   })), [], groups);
 }
 

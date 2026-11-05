@@ -72,6 +72,7 @@ main { margin-top: 18px; }
 .action-button:hover { border-color: #63a99f; background: #effaf7; }
 .quiet-button { border: 0; padding: 5px 2px; background: transparent; color: #087268; font-size: 12px; font-weight: 760; }
 .quiet-button:hover { color: #045e57; text-decoration: underline; text-underline-offset: 3px; }
+.candidate-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; }
 .timeline-item { gap: 8px; padding: 10px 0; border-bottom: 1px solid #dbe5e8; }
 .timeline-item > div { min-width: 0; flex: 1; }
 .feedback { min-height: 18px; margin-top: 20px; color: #087268; }

@@ -66,14 +66,15 @@ export async function verifySession({ context, control, fixture, extensionUrl, m
   assert.ok(importedWorkspace.groups.some((item) => item.title === "研究布局" && item.color === "blue" && item.collapsed));
   assert.equal(importedWorkspace.tabs.filter((item) => item.status === "suspended").length, checkpoint.tabs.filter((item) => item.status === "suspended").length);
   const exported = await message(control, "exportBackup");
-  assert.ok(exported.workspaces.find((item) => item.name === "导入的会话布局").groups.length);
+  assert.ok(exported.payload.workspaces.find((item) => item.name === "导入的会话布局").groups.length);
   // Live UI refresh preserves a workspace draft, page checks, search and focus.
   await control.bringToFront();
   await control.locator("#workspace-manager .saved-workspace").first().getByRole("button", { name: "编辑", exact: true }).click();
   const draft = control.locator('.workspace-editor input[name="workspace-name"]');
   await draft.fill("尚未保存的修改");
-  const checkbox = control.locator(".workspace-editor .saved-members input").first();
+  const checkbox = control.locator('.workspace-editor .saved-members input[type="checkbox"]').first();
   await checkbox.uncheck();
+  await control.locator("#ai-scope").selectOption("selected");
   await control.locator("#page-search").fill("session-pin");
   await control.locator("#search-results .result").first().waitFor();
   const added = await control.evaluate((base) => chrome.tabs.create({ url: `${base}/live-sync-marker`, active: false }), fixture.baseUrl);
@@ -160,7 +161,7 @@ export async function verifySession({ context, control, fixture, extensionUrl, m
   await control.locator(".diff-removed").getByText("session-sleep", { exact: true }).waitFor();
   const missing = await message(control, "compareCheckpoint", { beforeId: checkpoint.id, afterId: "current" });
   assert.ok(missing.removed.some((item) => item.url.endsWith("/session-sleep")));
-  for (const input of await control.locator(".diff-removed input").all()) await input.uncheck();
+  for (const input of await control.locator('.diff-removed input[type="checkbox"]').all()) await input.uncheck();
   const missingSleep = control.locator(".diff-removed label").filter({ hasText: "session-sleep" }).locator("input");
   await missingSleep.check();
   await control.locator("[data-session=restore-missing]").click();

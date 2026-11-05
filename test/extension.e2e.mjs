@@ -7,6 +7,7 @@ import { chromium } from "playwright";
 import { sourceState } from "../src/shared/restoration.js";
 import { verifySession } from "./session.e2e.mjs";
 import { verifyExpansion } from "./expansion.e2e.mjs";
+import { verifyEnhancements } from "./enhancements.e2e.mjs";
 
 const extensionPath = path.resolve(".");
 
@@ -705,6 +706,7 @@ try {
 
   await verifySession({ context, control, fixture, extensionUrl, message, waitForBrowserState, waitForWorker });
   await verifyExpansion({ context, control, fixture, extensionUrl, message, waitForBrowserState, waitForWorker });
+  await verifyEnhancements({ context, control, fixture, extensionUrl, message, waitForBrowserState, waitForWorker });
   if (process.env.TABWISE_E2E_ARTIFACT_DIR) {
     await control.reload();
     await control.locator(".operation-item").first().waitFor();

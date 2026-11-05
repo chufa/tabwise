@@ -70,7 +70,21 @@ OLLAMA_ORIGINS='chrome-extension://<TabWise 扩展 ID>' ollama serve
 
 侧栏和 Popup 中的工作区与恢复点提供恢复预览，可以全选、全不选或逐页勾选。默认跳过所有窗口中已打开（包括休眠）的相同 URL，也会去重所选页面；取消该选项可明确打开副本。每批最多 5 页，等待加载完成后继续，单页等待最多 8 秒，超时显示“仍在加载”，后续批次继续。每页有成功、跳过或失败结果。预览只在当前界面文档、当前浏览器会话有效，5 分钟过期；执行前校验保存内容，预览只允许执行一次。恢复的是保存的网址，不能还原网页进程、表单或登录态。
 
-工作区可重命名、取消成员、固定或归档；勾选多个工作区后可创建去重合并的工作区，原工作区保留。搜索打开成员和确认恢复都会更新最近打开时间。移入回收站仅改变本地快照，不关闭标签，也不参与搜索、AI 分析或自动归档。回收站最多 20 个，满额时拒绝继续移入；可恢复或在明确确认后永久删除。恢复及撤销也遵守 20 个有效工作区上限。备份导出只包括回收站之外的工作区，导入容量不足时拒绝整批导入，不覆盖现有工作区。
+工作区可重命名、取消成员、固定或归档；勾选多个工作区后可合并，原工作区保留。布局快照合并保留窗口边界、重复页面、组信息和来源历史；旧版纯网址列表合并仍会去重。搜索打开成员和确认恢复都会更新最近打开时间。移入回收站仅改变本地快照，不关闭标签，也不参与搜索、AI 分析或自动归档。回收站最多 20 个，满额时拒绝继续移入；可恢复或在明确确认后永久删除。恢复及撤销也遵守 20 个有效工作区上限。备份导出只包括回收站之外的工作区，导入容量不足时拒绝整批导入，不覆盖现有工作区。
+
+## 备份完整性
+
+新版 JSON 备份使用规范化 SHA-256 校验及页数、窗口、组和历史版本计数，保存工作区布局、休眠状态和最近 5 个版本。导入先预览，不修改存储；相同内容默认跳过，也可保留副本。ID 冲突生成新副本并记录来源，设置需单独勾选才导入。确认时重新检查当前工作区与容量，工作区和设置一次性写入；存储失败保留原数据并允许重试。
+
+旧版无校验备份仍可导入，会显示提示和无效页面计数。上限为 8 MiB、单个快照 5000 页、工作区及历史合计 50000 页、20 个有效工作区；超限明确拒绝，不截断页面。SHA-256 用于检测内容变化，不提供签名或加密。
+
+## 统一批量任务与命令面板
+
+任务中心统一显示恢复、批量休眠、分组和预算回收。休眠和回收每批最多 5 页，分组按窗口逐个执行；可停止、查看每项结果并重试失败或未完成项目。恢复任务保留最近 10 项，批量任务另保留最近 10 项；进行中的批量记录不能被后续任务挤出。后台重启标记中断，执行结果不确定的项需手动检查，不自动重放。
+
+批量休眠和分组先显示可分页的选择预览，确认时保留原目标身份，执行前重新检查网址、活动、保护及分组布局；变化项跳过。成功项生成一次整体撤销；分组原布局在操作前保存，记录写入失败时不执行该窗口。预算回收共用任务队列及原有闲置与网页保护检查。
+
+Popup 和侧栏点击「命令」或按 `⌘K` / `Ctrl+K` 打开命令面板。支持方向键、Enter、Escape、焦点返回和本地页面搜索；可保存恢复点、填写工作区名称、打开工作区恢复预览、休眠/分组预览、预算预览、撤销最近操作及打开设置。搜索结果有数量限制，旧请求不会覆盖新输入。快捷键在 TabWise 界面内生效；浏览器任意页面打开侧栏仍使用既有的 `⌘⇧K` / `Ctrl+Shift+K`。
 
 ## 自动化运行记录
 
@@ -98,7 +112,7 @@ Popup 和侧栏显示当前浏览器会话最近 10 个恢复任务，最多同�
 
 ## 大量标签性能
 
-Popup 标签列表每页最多渲染 50 条，翻页、刷新时保留当前页；修改搜索或筛选后回到第一页。整理建议最多展示 12 项，展开成员最多 50 页。侧栏搜索继续通过后台检索完整索引，再返回有限结果。
+Popup 标签列表、恢复选择、工作区编辑与更新差异、快照差异、批量预览、AI 手动页面选择和资源诊断每页最多渲染 50 条。跨页和筛选后的勾选保存在独立状态中，提交完整选择；「选择全部页」和清空作用于全部列表。AI 手动选择最多 20 页，仅在选择该范围时挂载列表。实时刷新复用带身份的 DOM 节点，保留输入草稿、焦点、展开状态和滚动位置。整理建议最多展示 12 项，展开成员最多 50 页；侧栏搜索通过后台检索完整索引，再返回有限结果。
 
 快照构建和差异对比使用窗口、分组和重复网址映射，避免逐页扫描全部列表。只有标题、域名或网址变化才重新编译中文/拼音搜索数据，活动、状态、窗口等变化更新结果元数据；并发搜索共用正在进行的索引构建。标签元数据更新按 100 ms 合并最新值，关闭标签前立即写入待处理更新；未变化数据不重复写入。
 
@@ -128,7 +142,7 @@ Use `tw <keywords>` in Chrome's address bar to search. The first result can be o
 
 ## Page memory diagnostics
 
-TabWise rotates across at most 25 eligible webpages per one-minute sampling round, with at most four script calls in flight. Automatic idle checks rotate across at most 50 tabs, so large windows do not permanently miss tabs beyond the first 50. Untouched samples remain available while closed, discarded and navigated tabs lose stale samples; navigation revisions reject measurements from a changed document even if it returns to the same URL. UI refreshes do not start repeated rounds within a minute. The dashboard displays measured/eligible coverage and the latest session-only value in each tab row; those values come from different sampling times. Resource Diagnostics and resource reviews can force a full refresh with the same concurrency limit. Chrome Dev and Canary can additionally grant the optional `processes` permission to display shared Renderer private memory. Renderer processes can be shared by several tabs, so that metric is shown once per Renderer with its related tabs, not as exact per-tab memory.
+TabWise rotates across at most 25 eligible webpages per one-minute sampling round, with at most four script calls in flight. Automatic idle checks rotate across at most 50 tabs, so large windows do not permanently miss tabs beyond the first 50. Untouched samples remain available while closed, discarded and navigated tabs lose stale samples; navigation revisions reject measurements from a changed document even if it returns to the same URL. UI refreshes do not start repeated rounds within a minute. The dashboard displays measured/eligible coverage and the latest session-only value in each tab row; those values come from different sampling times. Resource Diagnostics and resource reviews can force a full refresh with the same concurrency limit. 为保持稳定版 Chrome 的安装兼容性，诊断使用网页 JavaScript 堆采样，不申请仅开发版可用的 `processes` 权限。
 
 ## Suspension modes
 

@@ -9,7 +9,10 @@ const area = (name) => ({
     if (Array.isArray(keys)) return Object.fromEntries(keys.map((key) => [key, structuredClone(source[key])]));
     return structuredClone(source);
   },
-  async set(values) { Object.assign(stores[name], structuredClone(values)); },
+  async set(values) {
+    if (name === "local" && failBackupWrite && values.workspaces && values.settings) throw new Error("fixture quota failure");
+    Object.assign(stores[name], structuredClone(values));
+  },
   async remove(key) { delete stores[name][key]; }
 });
 const event = () => {
@@ -25,6 +28,7 @@ let activeLoads = 0;
 let peakLoads = 0;
 let failCreateUrl;
 let onSample;
+let failBackupWrite = false;
 const alarms = new Map();
 globalThis.chrome = {
   storage: { local: area("local"), session: area("session") },
@@ -186,6 +190,142 @@ test("worker restart records interrupted opening without replay and rejects retr
   assert.equal(tabs.length, 0);
   stores.local.workspaces[0].tabs[0].url = "https://changed.test/";
   await assert.rejects(restarted.retry("interrupted-task"), /变化/);
+});
+
+test("backup preview does not mutate storage, checks ownership and imports settings/workspaces atomically", async () => {
+  stores.local.workspaces = [];
+  stores.local.settings = { idleMinutes: 30, autoSuspend: false, resourceSampling: false };
+  const backup = { schemaVersion: 1, settings: { idleMinutes: 60 }, workspaces: [{ id: "saved", name: "Saved", tabs: [{ url: "https://backup.test/" }] }] };
+  const before = structuredClone(stores.local);
+  const preview = await message("prepareBackupImport", { backup });
+  assert.equal(preview.ok, true);
+  assert.deepEqual(stores.local, before);
+  assert.equal((await message("confirmBackupImport", { previewId: preview.previewId, indices: [0] }, { ...sender, documentId: "stranger" })).ok, false);
+  failBackupWrite = true;
+  const failure = await message("confirmBackupImport", { previewId: preview.previewId, indices: [0], includeSettings: true });
+  assert.equal(failure.ok, false);
+  assert.deepEqual(stores.local, before, "failed storage write leaves both settings and workspaces unchanged");
+  failBackupWrite = false;
+  const imported = await message("confirmBackupImport", { previewId: preview.previewId, indices: [0], includeSettings: true });
+  assert.equal(imported.count, 1);
+  assert.equal(stores.local.settings.idleMinutes, 60);
+  assert.equal(stores.local.workspaces[0].provenance.sourceId, "saved");
+  assert.equal((await message("confirmBackupImport", { previewId: preview.previewId, indices: [0] })).ok, false);
+});
+
+test("backup import skips identical content, preserves conflicting copies, rejects stale previews and over-capacity atomically", async () => {
+  stores.local.workspaces = [{ id: "existing", name: "Same", tabs: [{ title: "A", url: "https://same.test/" }] }];
+  const backup = { schemaVersion: 1, settings: { idleMinutes: 7 }, workspaces: [
+    { id: "existing", name: "Same", tabs: [{ title: "A", url: "https://same.test/" }] },
+    { id: "existing", name: "Changed", tabs: [{ url: "https://other.test/" }] }
+  ] };
+  const preview = await message("prepareBackupImport", { backup });
+  assert.equal(preview.workspaces[0].duplicate, true);
+  assert.equal(preview.workspaces[1].conflict, true);
+  const imported = await message("confirmBackupImport", { previewId: preview.previewId, indices: [0, 1] });
+  assert.equal(imported.count, 1);
+  assert.equal(imported.skipped, 1);
+  assert.equal(new Set(stores.local.workspaces.map((w) => w.id)).size, 2);
+  const stale = await message("prepareBackupImport", { backup });
+  stores.local.workspaces[0].tabs[0].url = "https://changed.test/";
+  assert.equal((await message("confirmBackupImport", { previewId: stale.previewId, indices: [1] })).ok, false);
+  const full = await message("prepareBackupImport", { backup });
+  stores.local.workspaces = Array.from({ length: 20 }, (_, i) => ({ id: `full${i}`, tabs: [] }));
+  const before = structuredClone(stores.local);
+  assert.equal((await message("importBackup", { backup })).ok, false);
+  assert.deepEqual(stores.local, before);
+  assert.ok(full.previewId);
+});
+
+test("unified batch task stops later suspensions, skips changed retry targets and creates one aggregate undo", async () => {
+  stores.session = { lastActivity: {} };
+  stores.local.suspensionRecords = {};
+  stores.local.settings = { autoSuspend: false, resourceSampling: false, trustedDomains: ["batch.test"] };
+  tabs = Array.from({ length: 12 }, (_, i) => ({ id: i + 1, url: `https://batch.test/${i}`, windowId: 1, title: `Batch ${i}`, status: "complete" }));
+  const update = chrome.tabs.update;
+  let release;
+  const hold = new Promise((resolve) => { release = resolve; });
+  let startedCount = 0;
+  chrome.tabs.update = async (id, changes) => {
+    if (changes.url?.includes("/suspended.html")) { startedCount++; await hold; }
+    return update(id, changes);
+  };
+  try {
+    const task = await message("startBatchSuspend");
+    assert.ok(task.taskId);
+    await settle(() => startedCount === 5);
+    const listed = await message("getTasks");
+    assert.equal(listed.find((item) => item.id === task.taskId).kind, "suspend");
+    await message("stopTask", { taskId: task.taskId });
+    release();
+    await settle(() => stores.session.batchTasks.find((item) => item.id === task.taskId).status === "stopped");
+    const stopped = await message("getTask", { taskId: task.taskId });
+    assert.equal(stopped.count, 5);
+    await settle(() => Boolean(stores.session.batchTasks.find((item) => item.id === task.taskId).operationId));
+    assert.equal((await message("getOperations")).filter((item) => item.label.includes("批量休眠")).length, 1);
+    tabs[5].url = "https://changed.test/";
+    const retry = await message("retryTask", { taskId: task.taskId });
+    await settle(() => stores.session.batchTasks.find((item) => item.id === retry.taskId).status === "completed");
+    const result = await message("getTask", { taskId: retry.taskId });
+    assert.equal(result.count, 6);
+    assert.equal(result.skipped, 1);
+    assert.equal(tabs[5].url, "https://changed.test/");
+  } finally { release(); chrome.tabs.update = update; }
+});
+
+test("batch preview owns its targets, keeps changed pages open and cannot be replayed", async () => {
+  stores.session = {};
+  stores.local.settings = { autoSuspend: false, resourceSampling: false, trustedDomains: ["preview.test"] };
+  stores.local.suspensionRecords = {};
+  tabs = [1, 2].map((id) => ({ id, url: `https://preview.test/${id}`, title: `Preview ${id}`, windowId: 1, status: "complete" }));
+  const preview = await message("prepareBatch", { kind: "suspend" });
+  assert.equal(preview.pages.length, 2);
+  assert.equal((await message("startBatchPreview", { previewId: preview.previewId, tabIds: [1] }, { ...sender, documentId: "other" })).ok, false);
+  tabs[0].url = "https://changed.test/";
+  const started = await message("startBatchPreview", { previewId: preview.previewId, tabIds: [1, 2] });
+  assert.ok(started.taskId);
+  await settle(() => stores.session.batchTasks.find((task) => task.id === started.taskId)?.status === "completed");
+  const detail = await message("getTask", { taskId: started.taskId });
+  assert.equal(detail.count, 1);
+  assert.equal(detail.skipped, 1);
+  assert.equal(tabs[0].url, "https://changed.test/");
+  assert.equal((await message("startBatchPreview", { previewId: preview.previewId, tabIds: [1] })).ok, false);
+});
+
+test("group tasks finish one window before stopping, persist undo evidence and retry remaining windows", async () => {
+  stores.session = {};
+  stores.local.settings = { autoSuspend: false, resourceSampling: false };
+  tabs = Array.from({ length: 6 }, (_, i) => ({ id: i + 1, title: `Group ${i}`, url: `https://group.test/${i}`, windowId: i < 3 ? 1 : 2, index: i % 3, groupId: -1, status: "complete" }));
+  const originalQuery = chrome.tabs.query, originalGroups = chrome.tabGroups, originalGroup = chrome.tabs.group;
+  let groupId = 0, calls = 0, release;
+  const groups = [];
+  const hold = new Promise((resolve) => { release = resolve; });
+  chrome.tabs.query = async (query = {}) => structuredClone(tabs.filter((tab) => !query.windowId || tab.windowId === query.windowId));
+  chrome.tabGroups = { query: async ({ windowId }) => structuredClone(groups.filter((group) => group.windowId === windowId)),
+    update: async (id, update) => Object.assign(groups.find((group) => group.id === id), update) };
+  chrome.tabs.group = async ({ tabIds, createProperties }) => {
+    calls++; if (calls === 1) await hold;
+    const id = ++groupId; groups.push({ id, windowId: createProperties.windowId, title: "", color: "grey", collapsed: false });
+    tabs.filter((tab) => tabIds.includes(tab.id)).forEach((tab) => { tab.groupId = id; });
+    return id;
+  };
+  try {
+    const started = await message("startBatchGroup", { tabIds: tabs.map((tab) => tab.id), title: "Groups" });
+    await settle(() => calls === 1);
+    assert.equal(stores.session.batchTasks[0].results[0].undoItems[0].before.tabs.length, 3);
+    await message("stopTask", { taskId: started.taskId });
+    release();
+    await settle(() => Boolean(stores.session.batchTasks.find((task) => task.id === started.taskId).operationId));
+    const result = await message("getTask", { taskId: started.taskId });
+    assert.equal(result.status, "stopped");
+    assert.equal(result.count, 3);
+    assert.equal(calls, 1);
+    const retry = await message("retryTask", { taskId: started.taskId });
+    await settle(() => Boolean(stores.session.batchTasks.find((task) => task.id === retry.taskId).operationId));
+    assert.equal((await message("getTask", { taskId: retry.taskId })).count, 3);
+    assert.equal(calls, 2);
+    assert.equal((await message("getOperations")).length, 2);
+  } finally { release(); chrome.tabs.query = originalQuery; chrome.tabGroups = originalGroups; chrome.tabs.group = originalGroup; }
 });
 
 test("workspace incremental update binds window, previews diff, retains versions and rejects stale confirmation", async () => {

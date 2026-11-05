@@ -1,12 +1,14 @@
 import { escapeHtml } from "./html.js";
 import { createPageIndex } from "./search.js";
 import { updateHTML } from "./live-ui.js";
+import { createPagedList } from "./paged-ui.js";
 
 export function createSessionUI(host, restoreUI, feedback, refresh) {
   const send = (message) => chrome.runtime.sendMessage(message);
   let history = [];
   let version = 0;
   let difference;
+  let missingMembers;
   const index = createPageIndex();
   host.innerHTML = `<details class="session-history"><summary>最近关闭 <span class="closed-count"></span></summary>
     <p class="saved-hint history-hint"></p><label>查找关闭的页面<input class="closed-search" type="search" placeholder="标题、拼音或网址"></label>
@@ -50,16 +52,17 @@ export function createSessionUI(host, restoreUI, feedback, refresh) {
         if (current !== version) return;
         if (!result?.ok) throw new Error(result?.reason || "对比失败。");
         difference = result;
-        const list = (pages, removed) => pages.map((page) => `<label class="saved-member">${removed ? `<input type="checkbox" value="${page.index}" checked>` : ""}
-          <span><strong>${escapeHtml(page.title || page.url)}</strong><small>${escapeHtml(page.url)}</small></span></label>`).join("");
         host.querySelector(".compare-result").innerHTML = `<p>新增 ${result.added.length} 页 · 缺失 ${result.removed.length} 页 · 布局或休眠变化 ${result.changed.length} 页</p>
           <p class="saved-hint">对比于 ${new Date().toLocaleTimeString()}。找回前会再次检查快照和已打开页面。</p>
-          <details open><summary>缺失页面 (${result.removed.length})</summary><div class="diff-removed saved-members">${list(result.removed, true) || "没有缺失页面。"}</div></details>
-          <details><summary>新增页面 (${result.added.length})</summary>${list(result.added)}</details>
-          <details><summary>变化页面 (${result.changed.length})</summary>${list(result.changed)}</details>
+          <details open><summary>缺失页面 (${result.removed.length})</summary><div class="diff-removed saved-members"></div></details>
+          <details><summary>新增页面 (${result.added.length})</summary><div class="diff-added"></div></details>
+          <details><summary>变化页面 (${result.changed.length})</summary><div class="diff-changed"></div></details>
           ${result.removed.length ? '<button type="button" data-session="restore-missing">预览找回所选缺失页</button>' : ""}`;
+        missingMembers = createPagedList(host.querySelector(".diff-removed"), { selected: true });
+        missingMembers.setData(result.removed);
+        for (const type of ["added", "changed"]) createPagedList(host.querySelector(`.diff-${type}`), { selectable: false }).setData(result[type].map((page, index) => ({ ...page, index })));
       } else if (action === "restore-missing" && difference) {
-        const indices = [...host.querySelectorAll(".diff-removed input:checked")].map((input) => Number(input.value));
+        const indices = missingMembers.values();
         if (!indices.length) throw new Error("请至少选择一个缺失页面。");
         await restoreUI.open("checkpoint", difference.beforeId, { indices, signature: difference.signature });
       }
