@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>TabWise 页面记忆</title>
     <link rel="stylesheet" href="sidepanel.css">
+    <link rel="stylesheet" href="../shared/workspace-ui.css">
   </head>
   <body>
     <header class="topbar">
@@ -28,8 +29,25 @@
         <span>查找页面</span>
         <input id="page-search" type="search" autocomplete="off" placeholder="例如：上周 React 性能文章">
       </label>
-      <p id="search-hint" class="hint">匹配打开页面、休眠页面、工作区和恢复点，数据只在本地浏览器中处理。</p>
+      <details class="saved-tools"><summary>搜索范围</summary><div class="search-filters">
+        <label>来源<select id="search-source"><option value="all">全部来源</option><option value="open">打开页面</option><option value="suspended">休眠记录</option><option value="workspace">工作区</option><option value="checkpoint">恢复点</option><option value="closed">最近关闭</option></select></label>
+        <label>状态<select id="search-status"><option value="all">全部状态</option><option value="open">已打开</option><option value="protected">已保护</option><option value="suspended">休眠中</option><option value="saved">已保存</option></select></label>
+        <label>窗口<select id="search-window"><option value="">全部窗口</option></select></label>
+        <label>工作区<select id="search-workspace"><option value="">全部工作区</option></select></label>
+      </div></details>
+      <p id="search-hint" class="hint">支持中文分词、拼音和英文纠错；相同网址合并展示全部来源，数据只在本地处理。</p>
       <div id="search-results" class="results empty-state">输入关键词开始查找。</div>
+      <section id="restore-preview" class="saved-tools restore-preview" hidden aria-label="恢复预览"></section>
+      <section id="restore-tasks" class="saved-tools" aria-label="恢复任务中心"></section>
+      <section id="resource-budget" class="saved-tools" aria-label="资源预算"></section>
+      <section id="session-tools" class="saved-tools session-tools" aria-label="会话找回"></section>
+
+      <section class="section">
+        <div class="section-heading"><h2>工作区</h2><button id="save-workspace" class="quiet-button" type="button">保存当前窗口</button></div>
+        <form id="save-workspace-form" class="saved-tools" hidden><label>工作区名称<input name="name" maxlength="80" required placeholder="例如：本周调研"></label><div class="saved-actions"><button type="submit">保存窗口</button></div></form>
+        <p class="hint">选择页面恢复、编辑成员；勾选多个工作区后可合并。</p>
+        <div id="workspace-manager" class="saved-tools"></div>
+      </section>
 
       <section class="section">
         <div class="section-heading">
@@ -45,7 +63,7 @@
           <h2>资源诊断</h2>
           <button id="measure-resources" class="quiet-button" type="button">立即更新</button>
         </div>
-        <p class="hint">所有 Chrome 网页均按 1 分钟休眠检查周期更新 JS 堆内存；Dev/Canary 可额外显示共享 Renderer 私有内存。</p>
+        <p id="sampling-coverage" class="hint">每分钟轮转采样最多 25 个网页，最多 4 个同时测量；立即更新可测量全部网页。</p>
         <div id="renderer-diagnostics" class="results empty-state">按需测量当前网页的内存。</div>
       </section>
 
@@ -63,13 +81,49 @@
           <h2>本地 AI 整理</h2>
           <span id="ai-status">未运行</span>
         </div>
-        <p class="hint">仅在点击生成后使用所选本地提供方处理当前网页的标题、域名和状态；不会上传页面正文或执行标签操作。</p>
+        <p class="hint">先选择范围、核对输入，再生成带成员和依据的主题建议。标题、域名和状态仅交给所选本地模型。</p>
+        <label class="ai-request-field" for="ai-scope">
+          <span>分析范围</span>
+          <select id="ai-scope">
+            <option value="current">当前窗口</option>
+            <option value="workspace">已保存工作区</option>
+            <option value="selected">手动勾选页面</option>
+          </select>
+        </label>
+        <label id="ai-workspace-field" class="ai-request-field" for="ai-workspace" hidden>
+          <span>选择工作区</span>
+          <select id="ai-workspace"></select>
+        </label>
+        <fieldset id="ai-selection" hidden>
+          <legend>选择页面（最多 20 页）</legend>
+          <div id="ai-tab-options" class="ai-page-list"></div>
+        </fieldset>
         <label class="ai-request-field" for="ai-request">
           <span>希望整理什么？</span>
-          <input id="ai-request" maxlength="240" placeholder="例如：按研究主题分组，并指出可稍后处理的页面">
+          <input id="ai-request" maxlength="240" placeholder="例如：按研究主题分组">
         </label>
-        <div class="ai-actions"><button id="generate-ai-brief" class="action-button" type="button">生成本地建议</button></div>
-        <div id="ai-brief" class="ai-brief empty-state">浏览器支持本地模型时，可在这里生成建议。</div>
+        <div class="ai-actions">
+          <button id="preview-ai-input" class="action-button" type="button">预览分析输入</button>
+          <button id="refresh-ai-sources" class="quiet-button" type="button">刷新页面列表</button>
+        </div>
+        <div id="ai-input-preview" hidden>
+          <p id="ai-input-summary" class="hint"></p>
+          <div id="ai-input-pages" class="ai-page-list"></div>
+          <p class="hint">以上为完整页面输入，不含 URL 路径、正文或表单。快照 10 分钟有效；生成不会操作标签页。</p>
+        </div>
+        <div class="ai-actions">
+          <button id="generate-ai-brief" class="action-button" type="button" disabled>生成主题建议</button>
+          <button id="stop-ai" class="quiet-button" type="button" hidden>停止生成</button>
+          <button id="clear-ai-cache" class="quiet-button" type="button">清空建议缓存</button>
+        </div>
+        <p class="hint">相同输入的建议缓存 5 分钟，仅用于当前浏览器会话；再次使用前会校验页面状态。</p>
+        <div id="ai-brief" class="ai-brief empty-state" role="status">预览输入后即可生成；你可以修改主题名和成员，再确认分组或保存。</div>
+      </section>
+
+      <section class="section">
+        <div class="section-heading"><h2>最近操作与撤销</h2></div>
+        <p class="hint">保留本次浏览器会话最近 20 次操作。撤销分组会恢复原分组与顺序；状态已变化的项会跳过。</p>
+        <div id="operations" class="timeline empty-state">正在读取操作记录。</div>
       </section>
 
       <section class="section">

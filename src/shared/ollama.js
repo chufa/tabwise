@@ -1,4 +1,16 @@
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+export const OLLAMA_PROBE_SCHEMA = { type: "object", additionalProperties: false, required: ["ok"], properties: { ok: { const: true } } };
+
+export function ollamaCapability(body) {
+  return Array.isArray(body?.capabilities) ? body.capabilities.includes("completion") : null;
+}
+
+export function validateOllamaProbe(answer) {
+  let value;
+  try { value = JSON.parse(answer); } catch { throw new Error("模型自检未返回有效 JSON。"); }
+  if (!value || value.ok !== true || Object.keys(value).length !== 1) throw new Error("模型自检 JSON 不符合要求。");
+  return true;
+}
 
 export function normalizeOllamaEndpoint(value, fallback = "") {
   try {
@@ -17,11 +29,13 @@ export function normalizeOllamaModel(value, fallback = "") {
   return /^[a-zA-Z0-9_.:/-]+$/.test(model) ? model : fallback;
 }
 
-export function buildOllamaRequest(prompt, model) {
+export function buildOllamaRequest(prompt, model, format) {
   return {
     model: normalizeOllamaModel(model),
-    prompt: String(prompt || "").slice(0, 6_000),
+    // Structured input is already bounded to 20 pages by the snapshot builder.
+    prompt: format ? String(prompt || "") : String(prompt || "").slice(0, 6_000),
     stream: false,
+    ...(format ? { format, think: false } : {}),
     options: { temperature: 0.2, num_predict: 900 }
   };
 }

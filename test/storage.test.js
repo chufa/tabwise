@@ -35,6 +35,8 @@ const {
   getResourceSnapshots,
   getRecord,
   getWorkspaces,
+  getAllWorkspaces,
+  getWorkspaceTrash,
   putRecord,
   removePrimaryRecord,
   removeRecord,
@@ -43,6 +45,24 @@ const {
   saveResourceSnapshots,
   updateWorkspace
 } = await import("../src/shared/storage.js");
+const { addClosedPage, getClosedPages, removeClosedPage, changeSettings } = await import("../src/shared/storage.js");
+
+test("closed history is bounded, excludes private pages and expires stored metadata", async () => {
+  await removeClosedPage();
+  await changeSettings((settings) => ({ ...settings, closedHistoryEnabled: true, closedHistoryDays: 7 }));
+  await Promise.all(Array.from({ length: 105 }, (_, id) => addClosedPage({ title: `Closed ${id}`, url: `https://closed.test/${id}` })));
+  assert.equal((await getClosedPages()).length, 100);
+  await addClosedPage({ url: "https://secret.test/", incognito: true });
+  await addClosedPage({ url: "chrome://settings" });
+  assert.ok((await getClosedPages()).every((item) => item.url.startsWith("https://closed.test/")));
+  stores.local.closedPages.push({ id: "expired", url: "https://old.test/", closedAt: Date.now() - 8 * 86_400_000 });
+  assert.equal((await getClosedPages()).some((item) => item.id === "expired"), false);
+  assert.equal(stores.local.closedPages.some((item) => item.id === "expired"), false);
+  await changeSettings((settings) => ({ ...settings, closedHistoryEnabled: false }));
+  assert.deepEqual(await getClosedPages(), []);
+  await addClosedPage({ url: "https://disabled.test/" });
+  assert.deepEqual(stores.local.closedPages, []);
+});
 
 test("keeps a restore record when its primary dashboard record is cleared", async () => {
   const record = { recordId: "record-1", tabId: 7, originalUrl: "https://example.com", title: "Example" };
@@ -51,6 +71,13 @@ test("keeps a restore record when its primary dashboard record is cleared", asyn
   assert.equal((await getRecord(record.recordId)).originalUrl, "https://example.com");
   await removeRecord(record.recordId);
   assert.equal(await getRecord(record.recordId), undefined);
+});
+
+test("concurrent record and history updates retain every tab", async () => {
+  await Promise.all(Array.from({ length: 25 }, (_, id) => putRecord({ recordId: `parallel-${id}`, tabId: 100 + id, originalUrl: `https://parallel.test/${id}` })));
+  for (let id = 0; id < 25; id++) assert.ok(await getRecord(`parallel-${id}`));
+  await Promise.all(Array.from({ length: 12 }, (_, id) => addRecentSuspension({ recordId: `parallel-recent-${id}`, originalUrl: `https://parallel.test/${id}` })));
+  assert.equal((await getRecentSuspensions()).filter((item) => item.recordId.startsWith("parallel-recent")).length, 12);
 });
 
 test("removes both record copies when the tab closes", async () => {
@@ -123,4 +150,21 @@ test("retains the 20 latest resource review records", async () => {
   assert.equal(reviews.length, 20);
   assert.equal(reviews[0].createdAt, 21);
   assert.equal(reviews.at(-1).createdAt, 2);
+});
+
+test("trash is excluded from workspaces and capacity failures never evict saved entries", async () => {
+  const old = structuredClone(stores.local.workspaces);
+  try {
+    stores.local.workspaces = [];
+    for (let index = 0; index < 20; index++) await addWorkspace({ id: `keep-${index}`, name: "Keep", tabs: [] });
+    await assert.rejects(() => addWorkspace({ id: "overflow", tabs: [] }), /20/);
+    assert.equal((await getAllWorkspaces()).length, 20);
+    await updateWorkspace("keep-0", { deletedAt: 100 });
+    assert.equal((await getWorkspaces()).length, 19);
+    assert.equal((await getWorkspaceTrash())[0].id, "keep-0");
+    await addWorkspace({ id: "new", tabs: [] });
+    await assert.rejects(() => updateWorkspace("keep-0", { deletedAt: 0 }), /20/);
+    assert.equal((await getWorkspaceTrash()).length, 1);
+    assert.equal((await getAllWorkspaces()).length, 21);
+  } finally { stores.local.workspaces = old; }
 });

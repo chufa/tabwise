@@ -1,4 +1,7 @@
-function normalize(value) {
+import { pinyin } from "../vendor/pinyin-pro.mjs";
+const segmenter = typeof Intl.Segmenter === "function" ? new Intl.Segmenter("zh", { granularity: "word" }) : null;
+
+export function normalize(value) {
   return String(value || "")
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -8,7 +11,9 @@ function normalize(value) {
 }
 
 function queryTerms(query) {
-  return normalize(query).split(/\s+/).filter((term) => term.length > 1 || /[\u3400-\u9fff]/.test(term));
+  const normalized = normalize(query);
+  return (segmenter ? [...segmenter.segment(normalized)].filter((part) => part.isWordLike).map((part) => part.segment) : normalized.split(/\s+/))
+    .filter((term) => term.length > 1 || /[\u3400-\u9fff]/.test(term));
 }
 
 const ASSOCIATIONS = [
@@ -20,17 +25,7 @@ const ASSOCIATIONS = [
 ];
 
 function queryGroups(query, semantic) {
-  const normalized = normalize(query);
-  if (!semantic) return queryTerms(normalized).map((term) => [term]);
-  let remaining = normalized;
-  const groups = [];
-  for (const association of ASSOCIATIONS) {
-    const matched = association.find((term) => remaining.includes(term));
-    if (!matched) continue;
-    groups.push(association);
-    remaining = remaining.replaceAll(matched, " ");
-  }
-  return [...groups, ...queryTerms(remaining).map((term) => [term])];
+  return queryTerms(query).map((term) => semantic ? ASSOCIATIONS.find((association) => association.includes(term)) || [term] : [term]);
 }
 
 function subsequenceScore(term, value) {
@@ -46,12 +41,63 @@ function subsequenceScore(term, value) {
 }
 
 function fieldScore(value, terms, weight) {
-  const normalized = normalize(value);
+  const normalized = value;
   if (!normalized) return 0;
   return terms.reduce((score, term) => {
     if (normalized.includes(term)) return score + weight + term.length;
     return score + subsequenceScore(term, normalized);
   }, 0);
+}
+
+function editDistance(left, right) {
+  const rows = Array.from({ length: left.length + 1 }, () => new Array(right.length + 1));
+  for (let i = 0; i <= left.length; i++) rows[i][0] = i;
+  for (let j = 0; j <= right.length; j++) rows[0][j] = j;
+  for (let i = 1; i <= left.length; i++) {
+    for (let j = 1; j <= right.length; j++) {
+      rows[i][j] = Math.min(rows[i - 1][j] + 1, rows[i][j - 1] + 1, rows[i - 1][j - 1] + Number(left[i - 1] !== right[j - 1]));
+      if (i > 1 && j > 1 && left[i - 1] === right[j - 2] && left[i - 2] === right[j - 1]) rows[i][j] = Math.min(rows[i][j], rows[i - 2][j - 2] + 1);
+    }
+  }
+  return rows[left.length][right.length];
+}
+
+function compilePage(page) {
+  const title = normalize(page.title);
+  const chinese = /[\u3400-\u9fff]/.test(title);
+  const phonetic = chinese ? normalize(pinyin(page.title, { toneType: "none" })) : "";
+  const initials = chinese ? normalize(pinyin(page.title, { pattern: "first", toneType: "none", type: "array" }).join("")) : "";
+  return { ...page, _search: {
+    title, domain: normalize(page.domain), url: normalize(page.url), haystack: normalize(`${page.title} ${page.domain} ${page.url}`),
+    words: queryTerms(`${page.title} ${page.domain}`), phonetic: phonetic.replaceAll(" ", ""), initials
+  } };
+}
+
+function matchesTerm(term, data) {
+  if (data.haystack.includes(term)) return true;
+  if (/^[a-z]+$/.test(term) && term.length >= 2 && (data.phonetic.includes(term) || data.initials.includes(term))) return true;
+  if (/^[a-z]+$/.test(term) && term.length >= 4 && data.words.some((word) => Math.abs(word.length - term.length) <= 2 && editDistance(term, word) <= (term.length >= 7 ? 2 : 1))) return true;
+  return data.words.some((word) => subsequenceScore(term, word) >= term.length * 3);
+}
+
+export function createPageIndex() {
+  const entries = new Map();
+  let compiled = 0;
+  return {
+    stats: () => ({ size: entries.size, compiled }),
+    replace(pages) {
+      const ids = new Set();
+      for (const page of pages) {
+        ids.add(page.id);
+        const prior = entries.get(page.id);
+        const signature = JSON.stringify([page.title, page.domain, page.url]);
+        if (prior?.signature !== signature) { entries.set(page.id, { signature, page: compilePage(page) }); compiled++; }
+        else prior.page = { ...page, _search: prior.page._search };
+      }
+      for (const id of entries.keys()) if (!ids.has(id)) entries.delete(id);
+    },
+    search(query, limit, options) { return searchPageMemory([...entries.values()].map((entry) => entry.page), query, limit, options); }
+  };
 }
 
 function tabActivityTime(tab) {
@@ -88,20 +134,26 @@ export function searchPageMemory(pages, query, limit = 30, options = {}) {
   if (!groups.length) return [];
   const newestAccess = Math.max(...pages.map((page) => Number(page.lastAccessed || page.createdAt || 0)), 0);
 
-  return pages
-    .map((page) => {
-      const haystack = normalize(`${page.title} ${page.domain} ${page.url}`);
-      const matchedTerms = groups.map((group) => group.find((term) => haystack.includes(term) || subsequenceScore(term, haystack) > 0));
+  const filtered = pages.filter((page) => (!options.source || options.source === "all" || page.source === options.source)
+    && (!options.workspaceId || page.workspaceId === options.workspaceId)
+    && (!options.windowId || page.windowId === Number(options.windowId))
+    && (!options.status || options.status === "all" || (options.status === "suspended" ? page.status === "suspended" : page.status === options.status)));
+  const ranked = filtered
+    .map((original) => {
+      const compiled = original._search ? original : compilePage(original);
+      const { _search: data, ...page } = compiled;
+      const matchedTerms = groups.map((group) => group.find((term) => matchesTerm(term, data)));
       if (matchedTerms.some((term) => !term)) return null;
-      const titleScore = matchedTerms.reduce((total, term) => total + fieldScore(page.title, [term], 40), 0);
-      const domainScore = matchedTerms.reduce((total, term) => total + fieldScore(page.domain, [term], 24), 0);
-      const urlScore = matchedTerms.reduce((total, term) => total + fieldScore(page.url, [term], 16), 0);
+      const titleScore = matchedTerms.reduce((total, term) => total + fieldScore(data.title, [term], 40), 0);
+      const domainScore = matchedTerms.reduce((total, term) => total + fieldScore(data.domain, [term], 24), 0);
+      const urlScore = matchedTerms.reduce((total, term) => total + fieldScore(data.url, [term], 16), 0);
 
       const age = Math.max(0, newestAccess - Number(page.lastAccessed || page.createdAt || 0));
       const recency = Math.max(0, 12 - age / 86_400_000);
       const sourceBoost = page.source === "open" ? 36 : page.source === "suspended" ? 12 : 2;
       const statusBoost = page.status === "live" ? 4 : page.status === "suspended" ? 3 : 0;
-      const score = titleScore + domainScore + urlScore + recency + sourceBoost + statusBoost;
+      const phoneticScore = matchedTerms.some((term) => data.phonetic.includes(term) || data.initials.includes(term)) ? 30 : 0;
+      const score = titleScore + domainScore + urlScore + recency + sourceBoost + statusBoost + phoneticScore;
       return {
         ...page,
         score,
@@ -110,8 +162,14 @@ export function searchPageMemory(pages, query, limit = 30, options = {}) {
       };
     })
     .filter(Boolean)
-    .sort((left, right) => right.score - left.score || Number(right.lastAccessed || 0) - Number(left.lastAccessed || 0))
-    .slice(0, limit);
+    .sort((left, right) => right.score - left.score || Number(right.lastAccessed || 0) - Number(left.lastAccessed || 0));
+  const results = options.deduplicate ? [...ranked.reduce((map, page) => {
+    const existing = map.get(page.url);
+    if (existing) existing.sources.push({ id: page.id, source: page.source, workspaceId: page.workspaceId, workspaceName: page.workspaceName, checkpointId: page.checkpointId });
+    else map.set(page.url, { ...page, sources: [{ id: page.id, source: page.source, workspaceId: page.workspaceId, workspaceName: page.workspaceName, checkpointId: page.checkpointId }] });
+    return map;
+  }, new Map()).values()] : ranked;
+  return results.slice(0, Math.min(100, Math.max(1, Number(limit) || 30)));
 }
 
 export function buildSuspendCandidate(tab, now = Date.now(), idleMinutes = 30) {

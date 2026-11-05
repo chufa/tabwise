@@ -56,6 +56,13 @@
           </label>
         </section>
         <section class="setting-group">
+          <h2>资源预算</h2>
+          <label class="switch-row" for="budget-enabled"><span><strong>启用预算提醒</strong><small>超出预算时显示回收建议，确认后才会休眠。仅选择已闲置且网页保护检查通过的页面。</small></span><input id="budget-enabled" type="checkbox"></label>
+          <label class="field-label" for="budget-tabs"><span>已加载网页数量</span><input id="budget-tabs" type="number" min="1" max="1000" required></label>
+          <label class="field-label" for="budget-heap"><span>已采样 JS 堆预算（MB）</span><input id="budget-heap" type="number" min="64" max="65536" required></label>
+          <p class="section-copy">JS 堆仅计入最近 5 分钟的采样，不代表浏览器物理内存。持续增长提示要求同一页面连续 3 次增长、累计至少 64 MB。使用智能保护模式可获得安全回收候选。</p>
+        </section>
+        <section class="setting-group">
           <h2>节能方式</h2>
           <label class="mode-option" for="strategy-placeholder">
             <input id="strategy-placeholder" name="suspension-strategy" type="radio" value="placeholder">
@@ -74,6 +81,11 @@
           </label>
         </section>
         <section class="setting-group">
+          <h2>最近关闭记录</h2>
+          <label class="switch-row" for="closed-history-enabled"><span><strong>保留最近关闭的页面</strong><small>仅保存标题与网址，无痕页面不记录；关闭此功能会清空已有记录。</small></span><input id="closed-history-enabled" type="checkbox"></label>
+          <label class="field-label" for="closed-history-days"><span>保留天数（最多 100 页）</span><input id="closed-history-days" type="number" min="1" max="30" required></label>
+        </section>
+        <section class="setting-group">
           <h2>本地 AI 提供方</h2>
           <label class="mode-option" for="ai-provider-browser">
             <input id="ai-provider-browser" name="ai-provider" type="radio" value="browser">
@@ -83,10 +95,13 @@
             <input id="ai-provider-ollama" name="ai-provider" type="radio" value="ollama">
             <span><strong>Ollama</strong><small>仅连接本机 loopback 地址，不上传页面正文或完整网址。</small></span>
           </label>
+          <div id="browser-model-check" class="connection-row"><button id="test-browser-model" type="button">自检浏览器模型</button><span id="browser-model-feedback" role="status"></span></div>
           <div id="ollama-config" class="ollama-config" hidden>
-            <label class="field-label" for="ollama-endpoint"><span>Ollama 地址</span><input id="ollama-endpoint" inputmode="url" maxlength="120" placeholder="http://127.0.0.1:11434"></label>
-            <label class="field-label" for="ollama-model"><span>模型名</span><input id="ollama-model" maxlength="120" placeholder="例如：qwen3:8b"></label>
-            <div class="connection-row"><button id="test-ollama" type="button">测试连接</button><span id="ollama-feedback" role="status"></span></div>
+            <label class="field-label" for="ollama-endpoint"><span>Ollama 地址</span><input id="ollama-endpoint" type="url" inputmode="url" maxlength="120" placeholder="http://127.0.0.1:11434"></label>
+            <label class="field-label" for="ollama-model"><span>模型名</span><input id="ollama-model" type="text" maxlength="120" placeholder="例如：qwen3:8b"></label>
+            <label class="field-label" for="ollama-model-choice"><span>已安装模型</span><select id="ollama-model-choice"><option value="">运行自检以加载列表</option></select></label>
+            <p class="section-copy">自检使用上方地址与模型，检查扩展来源、文本生成能力和小型 JSON 推理，不发送网页数据。冷启动最多等待 90 秒。</p>
+            <div class="connection-row"><button id="test-ollama" type="button">模型自检</button><span id="ollama-feedback" role="status"></span></div>
           </div>
         </section>
         <section class="setting-group">

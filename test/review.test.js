@@ -11,6 +11,12 @@ test("schedules the next daily review at the configured local hour", () => {
   assert.equal(new Date(nextReviewAt(18, afterReview)).getDate(), 2);
 });
 
+test("preserves minute precision across day boundaries", () => {
+  const now = new Date(2026, 10, 4, 18, 10).getTime();
+  assert.equal(nextReviewAt(18, now, 35), new Date(2026, 10, 4, 18, 35).getTime());
+  assert.equal(nextReviewAt(18, new Date(2026, 10, 4, 18, 36).getTime(), 35), new Date(2026, 10, 5, 18, 35).getTime());
+});
+
 test("records review evidence without scheduling destructive actions", () => {
   const review = buildResourceReview({
     candidates: [{ tabId: 1 }, { tabId: 2 }],

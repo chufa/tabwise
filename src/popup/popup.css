@@ -7,6 +7,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { width: 410px; max-height: 620px; overflow: auto; margin: 0; padding: 18px; background: #f4f7f8; }
 body::selection { background: #bfeae1; color: #102b34; }
 button, input, select { font: inherit; }
@@ -70,7 +71,7 @@ button:disabled { opacity: .52; cursor: default; transform: none; }
 .protection-hint { margin: 0 0 10px; color: #657b87; font-size: 12px; line-height: 1.5; }
 .workspace-form { gap: 7px; margin-bottom: 9px; }
 .workspace-form input { padding: 8px 9px; font-size: 12px; }
-.workspace-form .secondary-button { padding: 8px 10px; }
+.workspace-form .secondary-button { flex: 0 0 auto; padding: 8px 10px; }
 .workspace-search-field { display: block; margin-bottom: 9px; }
 .workspace-search-field input { padding: 8px 9px; font-size: 12px; }
 .row-actions { flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
