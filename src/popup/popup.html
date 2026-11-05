@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>TabWise</title>
     <link rel="stylesheet" href="popup.css">
+    <link rel="stylesheet" href="../shared/workspace-ui.css">
   </head>
   <body>
     <header class="topbar">
@@ -26,6 +27,9 @@
       <button id="pause-automation" class="secondary-button" type="button">暂停 1 小时</button>
     </section>
     <p id="action-feedback" class="feedback" role="status"></p>
+    <section id="restore-preview" class="saved-tools restore-preview" hidden aria-label="恢复预览"></section>
+    <section id="restore-tasks" class="saved-tools" aria-label="恢复任务中心"></section>
+    <section id="session-tools" class="saved-tools session-tools" aria-label="会话找回"></section>
 
     <section class="summary" aria-label="标签概览">
       <div><strong id="open-count">0</strong><span>全部标签</span></div>
@@ -35,6 +39,7 @@
       <div><strong id="js-heap-usage">--</strong><span>JS 堆总量</span></div>
     </section>
     <p id="resource-note" class="resource-note" role="note"></p>
+    <section id="resource-budget" class="saved-tools" aria-label="资源预算"></section>
 
     <section class="section">
       <div class="section-heading">
@@ -87,6 +92,7 @@
       </div>
       <p class="protection-hint">“已保护”标签默认不会自动休眠。可直接休眠非活动网页，但请先确认页面没有未保存内容。</p>
       <div id="tabs" class="list"></div>
+      <nav id="tab-pagination" class="saved-tools saved-actions" aria-label="标签页分页"></nav>
     </section>
 
     <section class="section workspace-section">
@@ -103,7 +109,7 @@
         <span class="visually-hidden">搜索保存的工作区</span>
         <input id="workspace-search" type="search" placeholder="搜索保存的工作区">
       </label>
-      <div id="workspaces" class="list"></div>
+      <div id="workspaces" class="saved-tools"></div>
     </section>
     <script type="module" src="popup.js"></script>
   </body>

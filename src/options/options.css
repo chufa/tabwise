@@ -1,5 +1,9 @@
 :root { color-scheme: light; font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif; color: #132634; background: #f4f7f8; accent-color: #087b70; }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
+select { width: min(460px, 100%); min-width: 0; padding: 9px 10px; border: 1px solid #b9ccd2; border-radius: 7px; background: #fff; color: inherit; font: inherit; }
+select:focus-visible { outline: 3px solid #63c4b5; outline-offset: 2px; }
+button:disabled { cursor: default; opacity: .5; transform: none; }
 body { margin: 0; background: #f4f7f8; }
 body::selection { background: #bfeae1; color: #102b34; }
 main { width: min(720px, calc(100% - 40px)); margin: 58px auto; }
@@ -39,7 +43,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 .privacy-note p, .backup-note p { max-width: 66ch; margin-top: 8px; color: #607681; font-size: 13px; line-height: 1.6; }
 .backup-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
 .connection-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
-.connection-row span { color: #087268; font-size: 13px; }
+.connection-row span { min-width: 0; overflow-wrap: anywhere; color: #087268; font-size: 13px; line-height: 1.55; }
 .import-button { display: inline-flex; align-items: center; border: 1px solid #b9ccd2; border-radius: 7px; padding: 10px 15px; background: #fff; color: #12655f; font-size: 13px; font-weight: 760; cursor: pointer; }
 .import-button:hover { border-color: #63a99f; background: #effaf7; }
 .import-button input { position: absolute; width: 1px; height: 1px; opacity: 0; }
@@ -59,6 +63,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
   .mode-option:hover { background: #193540; }
   input[type="number"], input[type="text"], input[type="url"], input[type="time"], textarea, .import-button { border-color: #3d5661; background: #172b37; color: #e8f1f4; }
   .connection-row span { color: #8edfd1; }
+  select { border-color: #3d5661; background: #172b37; color: #e8f1f4; }
   .import-button { color: #8edfd1; }
   .import-button:hover { border-color: #5e9a92; background: #213d47; }
 }

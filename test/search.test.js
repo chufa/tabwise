@@ -1,6 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildSuspendCandidate, searchPageMemory, sortTabs } from "../src/shared/search.js";
+import { buildSuspendCandidate, createPageIndex, searchPageMemory, sortTabs } from "../src/shared/search.js";
+
+test("1000 activity changes reuse compiled title data while status and window filters stay current", () => {
+  const index = createPageIndex();
+  const pages = Array.from({ length: 1000 }, (_, i) => ({ id: `tab:${i}`, title: `性能研究 ${i}`, url: `https://perf.test/${i}`, domain: "perf.test", source: "open", status: "open", windowId: 1 }));
+  index.replace(pages);
+  const before = index.stats().compiled;
+  index.replace(pages.map((page) => ({ ...page, windowId: 2, status: "protected", lastAccessed: 999 })));
+  assert.equal(index.stats().compiled, before);
+  assert.equal(index.search("xingneng", 10, { windowId: 1 }).length, 0);
+  assert.equal(index.search("xingneng", 10, { status: "protected", windowId: 2 }).length, 10);
+});
 
 const pages = [
   {
@@ -53,6 +64,43 @@ test("uses opt-in local term associations without sending page data away", () =>
 
 test("returns empty results for an empty query", () => {
   assert.deepEqual(searchPageMemory(pages, "   "), []);
+});
+
+test("incremental index keeps unchanged compiled entries but drops renamed and removed pages", () => {
+  const index = createPageIndex();
+  index.replace(pages);
+  assert.equal(index.search("react")[0].id, "tab:1");
+  index.replace([{ ...pages[0], title: "Database notes", url: "https://db.test/sql", domain: "db.test" }]);
+  assert.deepEqual(index.search("react"), []);
+  assert.equal(index.search("database")[0].id, "tab:1");
+  index.replace([]);
+  assert.deepEqual(index.search("database"), []);
+});
+
+test("Chinese segmentation matches separated title terms and filters window and page status together", () => {
+  const items = [{ id: "cn", title: "性能测试：浏览器介绍", url: "https://cn.test/", windowId: 8, status: "protected", source: "open" }];
+  assert.equal(searchPageMemory(items, "浏览器性能")[0].id, "cn");
+  assert.equal(searchPageMemory(items, "llq", 30, { windowId: "8", status: "protected" }).length, 1);
+  assert.equal(searchPageMemory(items, "llq", 30, { windowId: "9", status: "protected" }).length, 0);
+});
+
+test("finds Chinese titles by full pinyin and initials and tolerates English typos", () => {
+  const items = [...pages, { id: "chinese", title: "浏览器性能调研", url: "https://cn.test/", source: "workspace", status: "saved" }];
+  assert.equal(searchPageMemory(items, "liulanqi xingneng")[0].id, "chinese");
+  assert.equal(searchPageMemory(items, "llqxn")[0].id, "chinese");
+  assert.equal(searchPageMemory(items, "react performnace")[0].id, "tab:1");
+  assert.equal(searchPageMemory(items, "react performnace", 30, { semantic: true })[0].id, "tab:1");
+});
+
+test("merges identical URL sources after filtering and preserves exact fragments", () => {
+  const items = [...pages, { ...pages[0], id: "saved-1", source: "workspace", workspaceId: "work", status: "saved" },
+    { ...pages[0], id: "anchor", url: `${pages[0].url}#section` }];
+  const all = searchPageMemory(items, "react", 30, { deduplicate: true });
+  assert.equal(all.length, 3);
+  assert.equal(all.find((item) => item.id === "tab:1").sources.length, 2);
+  const filtered = searchPageMemory(items, "react", 30, { source: "workspace", workspaceId: "work", deduplicate: true });
+  assert.equal(filtered.length, 1);
+  assert.equal(filtered[0].source, "workspace");
 });
 
 test("sorts tabs by recency, observed duration, and measured JS heap", () => {

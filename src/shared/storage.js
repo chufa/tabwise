@@ -1,4 +1,12 @@
 import { DEFAULT_SETTINGS, SCHEMA_VERSION } from "./constants.js";
+import { snapshotSignature } from "./session.js";
+
+const queues = { local: Promise.resolve(), session: Promise.resolve() };
+export function queueStorage(area, work) {
+  const next = queues[area].catch(() => {}).then(work);
+  queues[area] = next;
+  return next;
+}
 
 const keys = Object.freeze({
   settings: "settings",
@@ -24,8 +32,16 @@ export async function getSettings() {
   return { ...DEFAULT_SETTINGS, ...saved };
 }
 
-export async function saveSettings(settings) {
-  await chrome.storage.local.set({ [keys.settings]: settings });
+export function saveSettings(settings) {
+  return queueStorage("local", () => chrome.storage.local.set({ [keys.settings]: settings }));
+}
+
+export function changeSettings(update) {
+  return queueStorage("local", async () => {
+    const settings = update(await getSettings());
+    await chrome.storage.local.set({ [keys.settings]: settings });
+    return settings;
+  });
 }
 
 export async function getRecords() {
@@ -33,12 +49,14 @@ export async function getRecords() {
   return records;
 }
 
-export async function putRecord(record) {
+export function putRecord(record) {
+  return queueStorage("local", async () => {
   const { [keys.records]: records = {}, [keys.restoreRecords]: restoreRecords = {} } = await chrome.storage.local.get([keys.records, keys.restoreRecords]);
   const nextRecord = { schemaVersion: SCHEMA_VERSION, ...record };
   records[record.recordId] = nextRecord;
   restoreRecords[record.recordId] = nextRecord;
   await chrome.storage.local.set({ [keys.records]: records, [keys.restoreRecords]: restoreRecords });
+  });
 }
 
 export async function getRecord(recordId) {
@@ -46,20 +64,25 @@ export async function getRecord(recordId) {
   return records[recordId] || restoreRecords[recordId];
 }
 
-export async function removeRecord(recordId) {
+export function removeRecord(recordId) {
+  return queueStorage("local", async () => {
   const { [keys.records]: records = {}, [keys.restoreRecords]: restoreRecords = {} } = await chrome.storage.local.get([keys.records, keys.restoreRecords]);
   delete records[recordId];
   delete restoreRecords[recordId];
   await chrome.storage.local.set({ [keys.records]: records, [keys.restoreRecords]: restoreRecords });
+  });
 }
 
-export async function removePrimaryRecord(recordId) {
+export function removePrimaryRecord(recordId) {
+  return queueStorage("local", async () => {
   const records = await getRecords();
   delete records[recordId];
   await chrome.storage.local.set({ [keys.records]: records });
+  });
 }
 
-export async function removeRecordsForTab(tabId) {
+export function removeRecordsForTab(tabId) {
+  return queueStorage("local", async () => {
   const { [keys.records]: records = {}, [keys.restoreRecords]: restoreRecords = {} } = await chrome.storage.local.get([keys.records, keys.restoreRecords]);
   let changed = false;
   const allRecords = { ...restoreRecords, ...records };
@@ -71,6 +94,7 @@ export async function removeRecordsForTab(tabId) {
     }
   }
   if (changed) await chrome.storage.local.set({ [keys.records]: records, [keys.restoreRecords]: restoreRecords });
+  });
 }
 
 export async function getActivity() {
@@ -78,11 +102,13 @@ export async function getActivity() {
   return activity;
 }
 
-export async function touchTab(tabId, at = Date.now()) {
+export function touchTab(tabId, at = Date.now()) {
+  return queueStorage("session", async () => {
   const { [keys.activity]: activity = {}, [keys.observedAt]: observedAt = {} } = await chrome.storage.session.get([keys.activity, keys.observedAt]);
   activity[tabId] = at;
   observedAt[tabId] ||= at;
   await chrome.storage.session.set({ [keys.activity]: activity, [keys.observedAt]: observedAt });
+  });
 }
 
 export async function getObservedAt() {
@@ -95,44 +121,79 @@ export async function getResourceSnapshots() {
   return snapshots;
 }
 
-export async function saveResourceSnapshots(snapshots) {
-  await chrome.storage.session.set({ [keys.resourceSnapshots]: snapshots });
+export function saveResourceSnapshots(snapshots) {
+  return queueStorage("session", () => chrome.storage.session.set({ [keys.resourceSnapshots]: snapshots }));
 }
 
-export async function removeResourceSnapshot(tabId) {
+export function removeResourceSnapshot(tabId) {
+  return queueStorage("session", async () => {
   const snapshots = await getResourceSnapshots();
+  const { heapHistory = {} } = await chrome.storage.session.get("heapHistory");
   delete snapshots[tabId];
-  await saveResourceSnapshots(snapshots);
+  delete heapHistory[tabId];
+  await chrome.storage.session.set({ [keys.resourceSnapshots]: snapshots, heapHistory });
+  });
 }
 
-export async function removeActivity(tabId) {
-  const { [keys.activity]: activity = {}, [keys.observedAt]: observedAt = {}, [keys.resourceSnapshots]: snapshots = {} } = await chrome.storage.session.get([keys.activity, keys.observedAt, keys.resourceSnapshots]);
+export function removeActivity(tabId) {
+  return queueStorage("session", async () => {
+  const { [keys.activity]: activity = {}, [keys.observedAt]: observedAt = {}, [keys.resourceSnapshots]: snapshots = {}, heapHistory = {} } = await chrome.storage.session.get([keys.activity, keys.observedAt, keys.resourceSnapshots, "heapHistory"]);
   delete activity[tabId];
   delete observedAt[tabId];
   delete snapshots[tabId];
-  await chrome.storage.session.set({ [keys.activity]: activity, [keys.observedAt]: observedAt, [keys.resourceSnapshots]: snapshots });
+  delete heapHistory[tabId];
+  await chrome.storage.session.set({ [keys.activity]: activity, [keys.observedAt]: observedAt, [keys.resourceSnapshots]: snapshots, heapHistory });
+  });
 }
 
-export async function getWorkspaces() {
+export async function getAllWorkspaces() {
   const { [keys.workspaces]: workspaces = [] } = await chrome.storage.local.get(keys.workspaces);
   return workspaces;
 }
 
-export async function addWorkspace(workspace) {
-  const workspaces = await getWorkspaces();
-  workspaces.unshift(workspace);
-  sortWorkspaces(workspaces);
-  await chrome.storage.local.set({ [keys.workspaces]: workspaces.slice(0, 20) });
+export async function getWorkspaces() {
+  return (await getAllWorkspaces()).filter((workspace) => !workspace.deletedAt);
 }
 
-export async function updateWorkspace(workspaceId, update) {
-  const workspaces = await getWorkspaces();
+export async function getWorkspaceTrash() {
+  return (await getAllWorkspaces()).filter((workspace) => workspace.deletedAt);
+}
+
+export function validateWorkspaceCapacity(workspaces) {
+  if (workspaces.filter((workspace) => !workspace.deletedAt).length > 20) throw new Error("工作区已达 20 个，请先移入回收站。");
+  if (workspaces.filter((workspace) => workspace.deletedAt).length > 20) throw new Error("回收站已达 20 个，请先整理回收站。");
+}
+
+export function addWorkspace(workspace) {
+  return queueStorage("local", async () => {
+  const workspaces = await getAllWorkspaces();
+  if (workspaces.some((item) => item.id === workspace.id)) throw new Error("工作区已存在。");
+  workspaces.unshift(workspace);
+  validateWorkspaceCapacity(workspaces);
+  sortWorkspaces(workspaces);
+  await chrome.storage.local.set({ [keys.workspaces]: workspaces });
+  });
+}
+
+export function updateWorkspace(workspaceId, update) {
+  return queueStorage("local", async () => {
+  const workspaces = await getAllWorkspaces();
   const index = workspaces.findIndex((workspace) => workspace.id === workspaceId);
   if (index === -1) return null;
   workspaces[index] = { ...workspaces[index], ...update };
+  validateWorkspaceCapacity(workspaces);
   sortWorkspaces(workspaces);
   await chrome.storage.local.set({ [keys.workspaces]: workspaces });
   return workspaces.find((workspace) => workspace.id === workspaceId);
+  });
+}
+
+export function changeWorkspaces(update) {
+  return queueStorage("local", async () => {
+    const workspaces = update(await getAllWorkspaces());
+    validateWorkspaceCapacity(workspaces);
+    await chrome.storage.local.set({ [keys.workspaces]: workspaces });
+  });
 }
 
 export async function getRecentSuspensions() {
@@ -140,16 +201,20 @@ export async function getRecentSuspensions() {
   return recent;
 }
 
-export async function addRecentSuspension(record) {
+export function addRecentSuspension(record) {
+  return queueStorage("local", async () => {
   const recent = await getRecentSuspensions();
   const next = [record, ...recent.filter((item) => item.recordId !== record.recordId)].slice(0, 20);
   await chrome.storage.local.set({ [keys.recentSuspensions]: next });
   return next;
+  });
 }
 
-export async function removeRecentSuspension(recordId) {
+export function removeRecentSuspension(recordId) {
+  return queueStorage("local", async () => {
   const recent = await getRecentSuspensions();
   await chrome.storage.local.set({ [keys.recentSuspensions]: recent.filter((item) => item.recordId !== recordId) });
+  });
 }
 
 export async function getRecoveryCheckpoints() {
@@ -157,14 +222,16 @@ export async function getRecoveryCheckpoints() {
   return checkpoints;
 }
 
-export async function addRecoveryCheckpoint(checkpoint) {
+export function addRecoveryCheckpoint(checkpoint) {
+  return queueStorage("local", async () => {
   const checkpoints = await getRecoveryCheckpoints();
-  const signature = checkpoint.tabs.map((tab) => tab.url).sort().join("\n");
-  const duplicate = checkpoints.some((item) => item.tabs.map((tab) => tab.url).sort().join("\n") === signature);
+  const signature = snapshotSignature(checkpoint);
+  const duplicate = checkpoints[0] && snapshotSignature(checkpoints[0]) === signature;
   if (duplicate) return checkpoints;
   const next = [checkpoint, ...checkpoints].slice(0, 10);
   await chrome.storage.local.set({ [keys.recoveryCheckpoints]: next });
   return next;
+  });
 }
 
 export async function getResourceReviews() {
@@ -172,9 +239,43 @@ export async function getResourceReviews() {
   return reviews;
 }
 
-export async function addResourceReview(review) {
+export function addResourceReview(review) {
+  return queueStorage("local", async () => {
   const reviews = await getResourceReviews();
   const next = [review, ...reviews].slice(0, 20);
   await chrome.storage.local.set({ [keys.resourceReviews]: next });
   return next;
+  });
+}
+
+export function saveResourceReviews(reviews) {
+  return queueStorage("local", () => chrome.storage.local.set({ [keys.resourceReviews]: reviews.slice(0, 20) }));
+}
+
+async function readClosedPages(now = Date.now()) {
+  const { closedPages = [] } = await chrome.storage.local.get("closedPages");
+  const settings = await getSettings();
+  const pages = settings.closedHistoryEnabled ? closedPages.filter((page) => page.closedAt > now - settings.closedHistoryDays * 86_400_000).slice(0, 100) : [];
+  if (pages.length !== closedPages.length) await chrome.storage.local.set({ closedPages: pages });
+  return pages;
+}
+
+export function getClosedPages(now = Date.now()) {
+  return queueStorage("local", () => readClosedPages(now));
+}
+
+export function addClosedPage(page) {
+  return queueStorage("local", async () => {
+    const settings = await getSettings();
+    if (!settings.closedHistoryEnabled || !/^https?:\/\//.test(page.url) || page.incognito) return;
+    const pages = await readClosedPages();
+    await chrome.storage.local.set({ closedPages: [{ id: crypto.randomUUID(), title: page.title || page.url, url: page.url, closedAt: Date.now() }, ...pages].slice(0, 100) });
+  });
+}
+
+export function removeClosedPage(id) {
+  return queueStorage("local", async () => {
+    const pages = await readClosedPages();
+    await chrome.storage.local.set({ closedPages: id ? pages.filter((page) => page.id !== id) : [] });
+  });
 }

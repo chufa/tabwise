@@ -1,5 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { ollamaCapability, validateOllamaProbe } from "../src/shared/ollama.js";
+
+test("recognizes completion models and rejects invalid self-check output", () => {
+  assert.equal(ollamaCapability({ capabilities: ["embedding"] }), false);
+  assert.equal(ollamaCapability({ capabilities: ["completion", "vision"] }), true);
+  assert.equal(ollamaCapability({}), null);
+  assert.equal(validateOllamaProbe('{"ok":true}'), true);
+  for (const output of ['{"ok":false}', 'text', '{"ok":true,"action":"close"}']) assert.throws(() => validateOllamaProbe(output));
+});
 import { buildOllamaRequest, normalizeOllamaEndpoint } from "../src/shared/ollama.js";
 
 test("accepts only local Ollama endpoints", () => {
@@ -18,4 +27,12 @@ test("builds bounded non-streaming Ollama requests", () => {
     stream: false,
     options: { temperature: 0.2, num_predict: 900 }
   });
+});
+
+test("structured theme requests spend the output budget on JSON instead of thinking", () => {
+  const schema = { type: "object" };
+  const request = buildOllamaRequest("主题输入", "qwen3.8:27b-mlx", schema);
+  assert.equal(request.think, false);
+  assert.equal(request.format, schema);
+  assert.equal(request.stream, false);
 });

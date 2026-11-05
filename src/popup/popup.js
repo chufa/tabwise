@@ -1,8 +1,21 @@
 import { escapeHtml } from "../shared/html.js";
 import { sortTabs } from "../shared/search.js";
+import { createRestoreUI, createWorkspaceUI } from "../shared/workspace-ui.js";
+import { createRefresh, connectLiveUI, updateHTML } from "../shared/live-ui.js";
+import { createSessionUI } from "../shared/session-ui.js";
+import { createTaskUI } from "../shared/task-ui.js";
+import { createBudgetUI } from "../shared/budget-ui.js";
 
 const $ = (selector) => document.querySelector(selector);
 const state = { data: null, filter: "all", sort: "recent", search: "", workspaceSearch: "", workspaces: [], recent: [], checkpoints: [], expandedSuggestions: new Set(), tabMessages: new Map() };
+let tabPage = 0;
+let tabAnchor;
+const render = createRefresh(refreshDashboard);
+const restoreUI = createRestoreUI($("#restore-preview"), setFeedback, render);
+const workspaceUI = createWorkspaceUI($("#workspaces"), restoreUI, setFeedback, render);
+const sessionUI = createSessionUI($("#session-tools"), restoreUI, setFeedback, render);
+const taskUI = createTaskUI($("#restore-tasks"), setFeedback, render);
+const budgetUI = createBudgetUI($("#resource-budget"), setFeedback, render);
 
 function formatRelativeTime(timestamp) {
   if (!timestamp) return "刚开始追踪";
@@ -111,7 +124,7 @@ function renderSuggestions(organization) {
   const details = (key, tabIds) => {
     if (!state.expandedSuggestions.has(key)) return "";
     const items = tabIds.map((tabId) => tabById.get(tabId)).filter(Boolean);
-    return `<div class="suggestion-details">${items.map((tab) => `<button class="suggestion-tab" data-action="focus-tab" data-id="${tab.id}" type="button"><strong>${escapeHtml(tab.title)}</strong><span>${escapeHtml(tab.domain || tab.url)}</span></button>`).join("")}</div>`;
+    return `<div class="suggestion-details">${items.slice(0, 50).map((tab) => `<button class="suggestion-tab" data-action="focus-tab" data-id="${tab.id}" type="button"><strong>${escapeHtml(tab.title)}</strong><span>${escapeHtml(tab.domain || tab.url)}</span></button>`).join("")}${items.length > 50 ? '<p>仅展示前 50 页，可在侧栏按网站搜索全部页面。</p>' : ""}</div>`;
   };
   const entries = [
     ...organization.domainGroups.map((group) => {
@@ -138,13 +151,18 @@ function renderSuggestions(organization) {
   ];
   $("#suggestion-count").textContent = entries.length ? `${entries.length} 项建议` : "已整理";
   $("#suggestions").className = entries.length ? "list" : "list empty-state";
-  $("#suggestions").innerHTML = entries.join("") || "当前没有可分组或重复的标签页。";
+  updateHTML($("#suggestions"), entries.slice(0, 12).join("") || "当前没有可分组或重复的标签页。");
 }
 
 function renderTabs() {
   const tabs = visibleTabs();
+  const anchorIndex = tabAnchor === undefined ? -1 : tabs.findIndex((tab) => tab.id === tabAnchor);
+  if (anchorIndex >= 0) tabPage = Math.floor(anchorIndex / 50);
+  tabPage = Math.min(tabPage, Math.max(0, Math.ceil(tabs.length / 50) - 1));
+  const visible = tabs.slice(tabPage * 50, (tabPage + 1) * 50);
+  tabAnchor = visible[0]?.id;
   $("#tabs").className = tabs.length ? "list" : "list empty-state";
-  $("#tabs").innerHTML = tabs.map((tab) => {
+  updateHTML($("#tabs"), visible.map((tab) => {
     const isProtected = !tab.suspended && tab.status === "protected";
     const canTrust = isProtected && /^https?:/.test(tab.url) && tab.reason === "Untrusted domain";
     const canDirectSuspend = isProtected && /^https?:/.test(tab.url) && !["Active tab", "Still loading", "Already discarded by browser"].includes(tab.reason);
@@ -167,26 +185,37 @@ function renderTabs() {
       id: tab.suspended ? (tab.recordId || tab.id) : tab.id,
       badge: tab.suspended ? "休眠中" : isProtected ? "已保护" : ""
     });
-  }).join("") || "没有符合当前筛选条件的标签页。";
+  }).join("") || "没有符合当前筛选条件的标签页。");
+  updateHTML($("#tab-pagination"), `<button type="button" data-page="prev" ${tabPage ? "" : "disabled"}>上一页</button>
+    <span role="status">第 ${tabPage + 1} / ${Math.max(1, Math.ceil(tabs.length / 50))} 页 · 共 ${tabs.length} 页</span>
+    <button type="button" data-page="next" ${(tabPage + 1) * 50 >= tabs.length ? "disabled" : ""}>下一页</button>`);
 }
+
+$("#tab-pagination").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-page]");
+  if (!button || button.disabled) return;
+  tabPage += button.dataset.page === "next" ? 1 : -1;
+  tabAnchor = undefined;
+  renderTabs();
+});
 
 function renderRecovery() {
   $("#recent-count").textContent = state.recent.length ? `${state.recent.length} 项` : "";
   $("#recent-suspensions").className = state.recent.length ? "list" : "list empty-state";
-  $("#recent-suspensions").innerHTML = state.recent.slice(0, 3).map((record) => row({
+  updateHTML($("#recent-suspensions"), state.recent.slice(0, 3).map((record) => row({
     title: record.title || record.originalUrl,
     subtitle: `${domainForRecord(record.originalUrl)} · 休眠于 ${new Date(record.suspendedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
     action: { type: "restore-recent", label: "撤销" },
     id: record.recordId
-  })).join("") || "暂无可撤销的休眠操作。";
+  })).join("") || "暂无可撤销的休眠操作。");
 
   $("#checkpoints").className = state.checkpoints.length ? "list" : "list empty-state";
-  $("#checkpoints").innerHTML = state.checkpoints.slice(0, 3).map((checkpoint) => row({
-    title: `${checkpoint.tabs.length} 个标签页`,
+  updateHTML($("#checkpoints"), state.checkpoints.slice(0, 3).map((checkpoint) => row({
+    title: `${checkpoint.tabs.length} 个标签页${checkpoint.schemaVersion === 2 ? ` · ${checkpoint.windowCount} 个窗口` : ""}`,
     subtitle: new Date(checkpoint.createdAt).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }),
     action: { type: "restore-checkpoint", label: "打开" },
     id: checkpoint.id
-  })).join("") || "恢复点会每 30 分钟自动保存。";
+  })).join("") || "恢复点会每 30 分钟自动保存。");
 }
 
 function domainForRecord(url) {
@@ -197,8 +226,15 @@ function domainForRecord(url) {
   }
 }
 
-async function render() {
-  state.data = await send({ type: "getDashboard" });
+async function refreshDashboard() {
+  const [data, recent, checkpoints, workspaces, trash, closed] = await Promise.all([
+    send({ type: "getDashboard" }), send({ type: "getRecentSuspensions" }), send({ type: "getRecoveryCheckpoints" }),
+    send({ type: "getWorkspaces" }), send({ type: "getWorkspaceTrash" }), send({ type: "getClosedPages" })
+  ]);
+  state.data = data;
+  budgetUI.update(data.budget);
+  state.recent = recent;
+  state.checkpoints = checkpoints;
   const { tabs, summary, organization } = state.data;
   $("#open-count").textContent = tabs.length;
   $("#eligible-count").textContent = summary.eligible;
@@ -206,7 +242,7 @@ async function render() {
   $("#duplicate-count").textContent = organization.duplicates.reduce((total, group) => total + group.tabIds.length - 1, 0);
   $("#js-heap-usage").textContent = heapSummaryLabel(summary);
   const snapshotDetail = summary.jsHeapMeasuredTabs
-    ? `JS 堆采样：${summary.jsHeapMeasuredTabs} 个网页`
+    ? `JS 堆采样：${summary.jsHeapMeasuredTabs} / ${summary.jsHeapEligibleTabs} 个网页`
     : "尚未采集网页 JS 堆数据";
   const reclaimDetail = summary.reclaimableMeasuredTabs
     ? `候选预计可释放 ${formatMemory(summary.reclaimableJSHeap)}`
@@ -220,25 +256,11 @@ async function render() {
   renderAutomationState(state.data.settings);
   renderSuggestions(organization);
   renderTabs();
-  [state.recent, state.checkpoints] = await Promise.all([
-    send({ type: "getRecentSuspensions" }),
-    send({ type: "getRecoveryCheckpoints" })
-  ]);
   renderRecovery();
-
-  state.workspaces = await send({ type: "getWorkspaces" });
-  const normalizedSearch = state.workspaceSearch.trim().toLowerCase();
-  const workspaces = state.workspaces.filter((workspace) => !normalizedSearch || `${workspace.name} ${workspace.tabs.map((tab) => `${tab.title} ${tab.url}`).join(" ")}`.toLowerCase().includes(normalizedSearch));
-  $("#workspaces").className = workspaces.length ? "list" : "list empty-state";
-  $("#workspaces").innerHTML = workspaces.slice(0, 5).map((workspace) => row({
-    title: workspace.name,
-    subtitle: `${workspace.tabs.length} 个标签页 · ${workspace.archived ? "已归档" : new Date(workspace.createdAt).toLocaleDateString()}`,
-    action: { type: "open-workspace", label: workspace.archived ? "恢复" : "打开" },
-    secondaryAction: { type: "toggle-workspace-pinned", label: workspace.pinned ? "取消固定" : "固定" },
-    tertiaryAction: { type: "toggle-workspace-archived", label: workspace.archived ? "取消归档" : "归档" },
-    id: workspace.id,
-    badge: workspace.archived ? "已归档" : workspace.pinned ? "已固定" : ""
-  })).join("") || "保存窗口状态后，可在这里一键重新打开。";
+  state.workspaces = workspaces;
+  workspaceUI.setData(workspaces, trash, await send({ type: "getWorkspaceBindings" }));
+  sessionUI.setData(checkpoints, closed, data.settings);
+  await Promise.all([taskUI.update(), restoreUI.update()]);
 }
 
 document.body.addEventListener("click", async (event) => {
@@ -258,12 +280,10 @@ document.body.addEventListener("click", async (event) => {
   if (action === "focus-tab") result = await send({ type: "focusTab", tabId: Number(id) });
   if (action === "restore-recent") result = await send({ type: "restoreRecentSuspension", recordId: id });
   if (action === "restore-checkpoint") {
-    const checkpoint = state.checkpoints.find((item) => item.id === id);
-    if (checkpoint?.tabs.length > 10 && !window.confirm(`该恢复点包含 ${checkpoint.tabs.length} 个标签页，打开后可能增加浏览器负载。是否继续？`)) {
-      button.disabled = false;
-      return;
-    }
-    result = await send({ type: "restoreCheckpoint", checkpointId: id });
+    try { await restoreUI.open("checkpoint", id); }
+    catch (error) { setFeedback(error.message, true); }
+    button.disabled = false;
+    return;
   }
   if (action === "open-workspace") {
     const workspace = state.workspaces.find((item) => item.id === id);
@@ -316,10 +336,12 @@ $("#suspend-eligible").addEventListener("click", async () => {
 });
 $("#tab-search").addEventListener("input", (event) => {
   state.search = event.target.value;
+  tabPage = 0; tabAnchor = undefined;
   renderTabs();
 });
 $("#tab-sort").addEventListener("change", (event) => {
   state.sort = event.target.value;
+  tabPage = 0; tabAnchor = undefined;
   renderTabs();
 });
 document.addEventListener("keydown", (event) => {
@@ -333,6 +355,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && document.activeElement === search && search.value) {
     search.value = "";
     state.search = "";
+    tabPage = 0; tabAnchor = undefined;
     renderTabs();
   }
 });
@@ -340,6 +363,7 @@ document.querySelector(".filter-bar").addEventListener("click", (event) => {
   const filter = event.target.closest("[data-filter]");
   if (!filter) return;
   state.filter = filter.dataset.filter;
+  tabPage = 0; tabAnchor = undefined;
   document.querySelectorAll("[data-filter]").forEach((item) => item.classList.toggle("is-active", item === filter));
   renderTabs();
 });
@@ -355,12 +379,13 @@ $("#workspace-form").addEventListener("submit", async (event) => {
     $("#workspace-name").value = "";
     $("#workspace-form").hidden = true;
     setFeedback("已保存当前窗口");
-  }
+  } else setFeedback(result?.reason || "无法保存工作区", true);
   await render();
 });
 $("#workspace-search").addEventListener("input", (event) => {
   state.workspaceSearch = event.target.value;
-  render();
+  workspaceUI.setFilter(state.workspaceSearch);
 });
 
+connectLiveUI(render, (error) => setFeedback(error.message || "无法同步标签页", true));
 render().catch((error) => setFeedback(error.message || "无法读取标签页", true));
