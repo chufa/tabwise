@@ -45,7 +45,27 @@ const {
   saveResourceSnapshots,
   updateWorkspace
 } = await import("../src/shared/storage.js");
-const { addClosedPage, getClosedPages, removeClosedPage, changeSettings } = await import("../src/shared/storage.js");
+const { addClosedPage, clearLocalHistory, getClosedPages, removeClosedPage, changeSettings } = await import("../src/shared/storage.js");
+
+test("clears local history without deleting workspaces settings or active restoration records", async () => {
+  stores.local.settings = { idleMinutes: 45 };
+  stores.local.workspaces = [{ id: "keep", tabs: [] }];
+  stores.local.suspensionRestoreRecords = { active: { recordId: "active", originalUrl: "https://restore.test/" } };
+  stores.local.closedPages = [{ id: "closed", url: "https://closed.test/" }];
+  stores.local.recentSuspensions = [{ recordId: "recent" }];
+  stores.local.recoveryCheckpoints = [{ id: "checkpoint" }];
+  stores.local.resourceReviews = [{ id: "review" }];
+  stores.session.resourceSnapshots = { 1: { url: "https://sample.test/" } };
+  await clearLocalHistory();
+  assert.equal(stores.local.settings.idleMinutes, 45);
+  assert.equal(stores.local.workspaces[0].id, "keep");
+  assert.ok(stores.local.suspensionRestoreRecords.active);
+  assert.deepEqual(stores.local.closedPages, []);
+  assert.deepEqual(stores.local.recentSuspensions, []);
+  assert.deepEqual(stores.local.recoveryCheckpoints, []);
+  assert.deepEqual(stores.local.resourceReviews, []);
+  assert.deepEqual(stores.session.resourceSnapshots, {});
+});
 
 test("closed history is bounded, excludes private pages and expires stored metadata", async () => {
   await removeClosedPage();

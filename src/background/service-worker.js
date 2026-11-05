@@ -1,6 +1,6 @@
 import { ALARM_NAME, ALARM_PERIOD_MINUTES, CHECKPOINT_ALARM_NAME, CHECKPOINT_PERIOD_MINUTES, RESOURCE_REVIEW_ALARM_NAME, SUSPENDED_PAGE, SUSPENSION_MODES, SUSPENSION_STATES, SUSPENSION_STRATEGIES } from "../shared/constants.js";
 import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isIdleLongEnough, isSuspendableUrl, isSuspendedUrl, normalizeDomain, planLocalOrganization, smartSuspensionBlockReason, suspensionBlockReason } from "../shared/policy.js";
-import { addRecentSuspension, addRecoveryCheckpoint, addWorkspace, getActivity, getObservedAt, getRecentSuspensions, getRecord, getRecords, getRecoveryCheckpoints, getResourceReviews, getResourceSnapshots, getSettings, getWorkspaces, putRecord, removeActivity, removePrimaryRecord, removeRecentSuspension, removeRecord, removeRecordsForTab, removeResourceSnapshot, saveResourceSnapshots, saveSettings, touchTab } from "../shared/storage.js";
+import { addRecentSuspension, addRecoveryCheckpoint, addWorkspace, clearDiagnostics, clearLocalHistory, getActivity, getDiagnostics, getObservedAt, getRecentSuspensions, getRecord, getRecords, getRecoveryCheckpoints, getResourceReviews, getResourceSnapshots, getSettings, getWorkspaces, migrateStorage, putRecord, removeActivity, removePrimaryRecord, removeRecentSuspension, removeRecord, removeRecordsForTab, removeResourceSnapshot, reportDiagnostic, saveResourceSnapshots, saveSettings, touchTab } from "../shared/storage.js";
 import { buildSuspendCandidate, createPageIndex } from "../shared/search.js";
 import { buildHeapDiagnostics, buildRendererDiagnostics, summarizeHeapSnapshots } from "../shared/resource.js";
 import { buildResourceReclaimPlan } from "../shared/insights.js";
@@ -23,6 +23,9 @@ import { createBackupManager } from "./backup.js";
 import { createBatchRunner } from "../shared/batch.js";
 
 const extensionOrigin = chrome.runtime.getURL("").replace(/\/$/, "");
+const reportWorkerError = (error) => reportDiagnostic({ source: "service-worker", message: error?.message || String(error) }).catch(() => {});
+globalThis.addEventListener?.("error", (event) => reportWorkerError(event.error || event.message));
+globalThis.addEventListener?.("unhandledrejection", (event) => reportWorkerError(event.reason));
 const pageTracker = createPageTracker(extensionOrigin);
 const pageIndex = createPageIndex();
 let searchVersion = 0;
@@ -1134,6 +1137,7 @@ async function restoreTab(tabId) {
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
+  await migrateStorage();
   await ensureAlarm();
   await ensureCheckpointAlarm();
   await scheduleResourceReview();
@@ -1146,6 +1150,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   }
 });
 chrome.runtime.onStartup.addListener(async () => {
+  await migrateStorage();
   await ensureAlarm();
   await ensureCheckpointAlarm();
   await scheduleResourceReview();
@@ -1276,6 +1281,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   const tasks = {
     getDashboard,
+    getDiagnostics,
+    clearDiagnostics: async () => { await clearDiagnostics(); return { ok: true }; },
+    clearLocalHistory: async () => { await clearLocalHistory(); return { ok: true }; },
     prepareBudgetReclaim: () => prepareBudgetReclaim(sender),
     confirmBudgetReclaim: () => confirmBudgetReclaim(message, sender),
     startBudgetReclaim: () => confirmBudgetReclaim(message, sender, false),

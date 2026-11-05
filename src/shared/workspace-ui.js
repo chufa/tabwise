@@ -76,8 +76,11 @@ export function createRestoreUI(host, feedback, refresh) {
       if (current !== version) return;
       if (!result?.ok) throw new Error(result?.reason || "无法读取恢复预览。");
       preview = result;
+      const alreadyOpen = result.pages.filter((page) => page.existing).length;
+      const suspended = result.pages.filter((page) => page.status === "suspended").length;
       host.innerHTML = `<h2>选择恢复 · ${escapeHtml(result.name)}</h2>
-        <p class="saved-hint">只恢复勾选的页面。每批最多 5 页，当前标签保持打开。</p>
+        <p class="saved-hint">已选页面会分批恢复，每批最多 5 页；当前标签保持打开。</p>
+        <p class="saved-hint">共 ${result.pages.length} 页${alreadyOpen ? ` · ${alreadyOpen} 页已打开，默认跳过` : ""}${suspended ? ` · ${suspended} 页将保持休眠` : ""}${result.hasLayout ? ` · 目标 ${result.windowCount} 个窗口` : ""}。</p>
         <div class="saved-actions"><button type="button" data-restore="all">全选</button><button type="button" data-restore="none">全不选</button><span class="selection-count"></span></div>
         <fieldset class="saved-members"><legend>要恢复的页面</legend><div class="restore-page-list"></div></fieldset>
         <label class="saved-switch"><input class="skip-existing" type="checkbox" checked>跳过已打开的页面（所有窗口）</label>

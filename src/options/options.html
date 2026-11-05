@@ -121,6 +121,12 @@
       <section class="privacy-note">
         <h2>本地优先</h2>
         <p>设置、工作区快照和休眠记录仅保存在浏览器本地。TabWise 不上传页面正文、Cookie、表单内容或完整网址，也不会在未明确开启前调用外部大模型。</p>
+        <div class="backup-actions"><button id="clear-local-history" class="secondary" type="button">清除本地历史</button><span id="history-feedback" role="status"></span></div>
+      </section>
+      <section class="privacy-note" aria-labelledby="reliability-title">
+        <h2 id="reliability-title">可靠性与诊断</h2>
+        <p>仅本地保留最近 50 条脱敏错误摘要，用于排查扩展更新、恢复或任务失败。不包含网页标题、完整网址、表单内容或 Cookie。</p>
+        <div class="backup-actions"><button id="export-diagnostics" type="button">导出诊断摘要</button><button id="clear-diagnostics" class="secondary" type="button">清空诊断记录</button><span id="diagnostics-feedback" role="status"></span></div>
       </section>
       <section class="backup-note">
         <h2>本地备份</h2>

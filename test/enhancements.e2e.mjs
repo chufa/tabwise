@@ -132,8 +132,9 @@ export async function verifyEnhancements({ context, control, fixture, extensionU
   // skip navigation changes and undo the successful first batch as one operation.
   await message(control, "updateSettings", { settings: { suspensionMode: "conservative", suspensionStrategy: "placeholder", resourceBudgetEnabled: false, trustedDomains: ["127.0.0.1"], resourceSampling: false } });
   const batchTabs = await control.evaluate(async (base) => {
+    const current = await chrome.tabs.getCurrent();
     const tabs = [];
-    for (let i = 0; i < 12; i++) tabs.push(await chrome.tabs.create({ url: `${base}/unified-batch-${i}`, active: false }));
+    for (let i = 0; i < 12; i++) tabs.push(await chrome.tabs.create({ url: `${base}/unified-batch-${i}`, windowId: current.windowId, active: false }));
     return tabs;
   }, fixture.baseUrl);
   await waitForBrowserState(control, async (expected) => (await Promise.all(expected.map(({ id }) => chrome.tabs.get(id)))).every((tab, index) => tab.status === "complete" && !tab.pendingUrl && tab.url === expected[index].url),
@@ -151,8 +152,10 @@ export async function verifyEnhancements({ context, control, fixture, extensionU
   let stopped;
   try {
     const preview = await message(control, "prepareBatch", { kind: "suspend" });
-    const started = await message(control, "startBatchPreview", { previewId: preview.previewId, tabIds: batchTabs.map((tab) => tab.id) });
-    assert.ok(started.taskId, JSON.stringify({ started, previewIds: preview.pages?.map((page) => page.tabId), expectedIds: batchTabs.map((tab) => tab.id) }));
+    const selectedIds = preview.pages.slice(-12).map((page) => page.tabId);
+    assert.equal(selectedIds.length, 12);
+    const started = await message(control, "startBatchPreview", { previewId: preview.previewId, tabIds: selectedIds });
+    assert.ok(started.taskId);
     await waitForBrowserState(control, async (id) => (await chrome.storage.session.get("batchTasks")).batchTasks.find((task) => task.id === id).results.filter((page) => page.status === "executing").length === 5, started.taskId);
     await control.locator(`[data-task-id="${started.taskId}"] [data-task=stop]`).click();
     await batchWorker.evaluate(() => globalThis.releaseBatchUpdate());
@@ -160,9 +163,9 @@ export async function verifyEnhancements({ context, control, fixture, extensionU
     stopped = await message(control, "getTask", { taskId: started.taskId });
     assert.equal(stopped.status, "stopped");
     assert.equal(stopped.count, 5);
-    await control.evaluate(({ id, url }) => chrome.tabs.update(id, { url }), { id: batchTabs[5].id, url: `${fixture.baseUrl}/batch-changed` });
+    await control.evaluate(({ id, url }) => chrome.tabs.update(id, { url }), { id: selectedIds[5], url: `${fixture.baseUrl}/batch-changed` });
     await waitForBrowserState(control, async ({ id, url }) => { const tab = await chrome.tabs.get(id); return tab.status === "complete" && !tab.pendingUrl && tab.url === url; },
-      { id: batchTabs[5].id, url: `${fixture.baseUrl}/batch-changed` });
+      { id: selectedIds[5], url: `${fixture.baseUrl}/batch-changed` });
     const retried = await message(control, "retryTask", { taskId: started.taskId });
     await waitForBrowserState(control, async (id) => (await chrome.runtime.sendMessage({ type: "getTask", taskId: id })).status === "completed", retried.taskId);
     const retriedDetail = await message(control, "getTask", { taskId: retried.taskId });

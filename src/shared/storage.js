@@ -1,5 +1,7 @@
 import { DEFAULT_SETTINGS, SCHEMA_VERSION } from "./constants.js";
 import { snapshotSignature } from "./session.js";
+import { appendDiagnostic, diagnosticBundle } from "./diagnostics.js";
+import { migrateLocalState } from "./migrations.js";
 
 const queues = { local: Promise.resolve(), session: Promise.resolve() };
 export function queueStorage(area, work) {
@@ -20,6 +22,48 @@ const keys = Object.freeze({
   observedAt: "firstObservedAt",
   workspaces: "workspaces"
 });
+
+export async function migrateStorage() {
+  return queueStorage("local", async () => {
+    const current = await chrome.storage.local.get();
+    const { state, changed } = migrateLocalState(current);
+    if (changed) await chrome.storage.local.set(state);
+    return { changed, version: state.storageSchemaVersion };
+  });
+}
+
+export async function getDiagnostics() {
+  const [{ diagnostics = [] }, settings] = await Promise.all([chrome.storage.local.get("diagnostics"), getSettings()]);
+  return { records: diagnostics, bundle: diagnosticBundle({ extensionVersion: chrome.runtime.getManifest().version, settings, records: diagnostics }) };
+}
+
+export function reportDiagnostic(item) {
+  return queueStorage("local", async () => {
+    const { diagnostics = [] } = await chrome.storage.local.get("diagnostics");
+    await chrome.storage.local.set({ diagnostics: appendDiagnostic(diagnostics, item) });
+  });
+}
+
+export function clearDiagnostics() {
+  return queueStorage("local", () => chrome.storage.local.set({ diagnostics: [] }));
+}
+
+export function clearLocalHistory() {
+  return Promise.all([
+    queueStorage("local", () => chrome.storage.local.set({
+      closedPages: [],
+      [keys.recentSuspensions]: [],
+      [keys.recoveryCheckpoints]: [],
+      [keys.resourceReviews]: []
+    })),
+    queueStorage("session", () => chrome.storage.session.set({
+      [keys.resourceSnapshots]: {},
+      heapHistory: {},
+      aiAnalysisSnapshots: [],
+      aiThemeCache: []
+    }))
+  ]);
+}
 
 function sortWorkspaces(workspaces) {
   workspaces.sort((left, right) => Number(Boolean(left.archived)) - Number(Boolean(right.archived))

@@ -47,7 +47,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 .import-button { display: inline-flex; align-items: center; border: 1px solid #b9ccd2; border-radius: 7px; padding: 10px 15px; background: #fff; color: #12655f; font-size: 13px; font-weight: 760; cursor: pointer; }
 .import-button:hover { border-color: #63a99f; background: #effaf7; }
 .import-button input { position: absolute; width: 1px; height: 1px; opacity: 0; }
-#backup-feedback { color: #087268; font-size: 13px; }
+#backup-feedback, #diagnostics-feedback, #history-feedback { color: #087268; font-size: 13px; }
 #backup-preview { margin-top: 18px; }
 #backup-preview h3 { margin: 0 0 8px; font-size: 14px; }
 #backup-preview fieldset { max-height: 340px; overflow: auto; margin: 12px 0; padding: 8px 12px; border: 1px solid #d5e1e5; border-radius: 7px; }
@@ -64,7 +64,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
   .brand-mark { background: #236c77; }
   .brand-lockup { color: #8edfd1; }
   .field-label { color: #d5e8ee; }
-  #saved, #backup-feedback { color: #8edfd1; }
+  #saved, #backup-feedback, #diagnostics-feedback, #history-feedback { color: #8edfd1; }
   h2 { color: #e8f1f4; }
   .page-header, .setting-group, .privacy-note, .backup-note, .mode-option + .mode-option { border-color: #314854; }
   header p, .section-copy, .switch-row small, .mode-option small, .number-field, .privacy-note p, .backup-note p { color: #a8bdc7; }

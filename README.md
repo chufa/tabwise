@@ -144,6 +144,12 @@ Use `tw <keywords>` in Chrome's address bar to search. The first result can be o
 
 TabWise rotates across at most 25 eligible webpages per one-minute sampling round, with at most four script calls in flight. Automatic idle checks rotate across at most 50 tabs, so large windows do not permanently miss tabs beyond the first 50. Untouched samples remain available while closed, discarded and navigated tabs lose stale samples; navigation revisions reject measurements from a changed document even if it returns to the same URL. UI refreshes do not start repeated rounds within a minute. The dashboard displays measured/eligible coverage and the latest session-only value in each tab row; those values come from different sampling times. Resource Diagnostics and resource reviews can force a full refresh with the same concurrency limit. 为保持稳定版 Chrome 的安装兼容性，诊断使用网页 JavaScript 堆采样，不申请仅开发版可用的 `processes` 权限。
 
+## Production safeguards
+
+TabWise upgrades local storage through an idempotent schema migration on installation and browser startup; existing settings, workspaces and restore records are preserved. The settings page can export a bounded, redacted local diagnostic summary and clear local history, resource samples and AI cache without deleting settings, workspaces or active suspension restore records. Diagnostic summaries exclude page titles, complete URLs, form data and cookies.
+
+Recovery previews show the selected page count, already-open pages that will be skipped by default, suspended pages that will remain suspended and the intended window count. The GitHub Actions workflow runs unit tests, syntax checks and isolated Chromium extension regression tests on pull requests and `main` pushes.
+
 ## Suspension modes
 
 - **保守模式（默认）**：只自动休眠“可信网站”列表中的页面，适合对数据安全要求高的场景。

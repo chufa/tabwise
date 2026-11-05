@@ -139,6 +139,33 @@ $("#export-backup").addEventListener("click", async () => {
   } catch (error) { $("#backup-feedback").textContent = error.message; }
 });
 
+$("#export-diagnostics").addEventListener("click", async () => {
+  try {
+    const { bundle } = await chrome.runtime.sendMessage({ type: "getDiagnostics" });
+    const url = URL.createObjectURL(new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url; link.download = `tabwise-diagnostics-${new Date().toISOString().slice(0, 10)}.json`; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    $("#diagnostics-feedback").textContent = `已导出 ${bundle.records.length} 条本地诊断记录。`;
+  } catch (error) { $("#diagnostics-feedback").textContent = error.message; }
+});
+
+$("#clear-diagnostics").addEventListener("click", async () => {
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "clearDiagnostics" });
+    if (!result.ok) throw new Error(result.reason);
+    $("#diagnostics-feedback").textContent = "已清空本地诊断记录。";
+  } catch (error) { $("#diagnostics-feedback").textContent = error.message; }
+});
+
+$("#clear-local-history").addEventListener("click", async () => {
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "clearLocalHistory" });
+    if (!result.ok) throw new Error(result.reason);
+    $("#history-feedback").textContent = "已清除本地历史、资源采样和 AI 缓存；设置、工作区与当前休眠恢复记录仍保留。";
+  } catch (error) { $("#history-feedback").textContent = error.message; }
+});
+
 let backupPreviewId;
 let backupVersion = 0;
 $("#import-backup").addEventListener("change", async (event) => {
