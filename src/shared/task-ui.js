@@ -25,7 +25,9 @@ export function createTaskUI(host, feedback, refresh) {
     if (version !== revision) return;
     const detail = host.querySelector(".task-detail");
     detail.hidden = false;
+    const audit = (task.audit || []).slice(-4).map((event) => `<li>${escapeHtml(event.type)} · ${new Date(event.at).toLocaleTimeString()}</li>`).join("");
     updateHTML(detail, task.ok ? `<h3>逐项结果 · ${restoreStatus[task.status]}</h3><ul>${task.results.map((page) => `<li>${escapeHtml(page.title || `页面 ${page.index + 1}`)}${page.size ? ` · ${page.size} 页` : ""}：${escapeHtml(pageStatus(page))}</li>`).join("")}</ul>
+      ${audit ? `<details><summary>恢复事务记录</summary><ul>${audit}</ul></details>` : ""}
       <div class="saved-actions"><button type="button" data-task="prev" ${offset ? "" : "disabled"}>上一页</button><span>${Math.floor(offset / 50) + 1} / ${Math.max(1, Math.ceil((task.itemTotal ?? task.total) / 50))}</span><button type="button" data-task="next" ${offset + 50 >= (task.itemTotal ?? task.total) ? "disabled" : ""}>下一页</button><button type="button" data-task="close">关闭详情</button></div>` : `<p>${escapeHtml(task.reason)}</p>`);
   }
   host.addEventListener("click", async (event) => {

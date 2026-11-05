@@ -116,6 +116,17 @@
           <label class="visually-hidden" for="blocked-domains">永不休眠域名</label>
           <textarea id="blocked-domains" rows="5" spellcheck="false" placeholder="mail.example.com&#10;meet.example.com"></textarea>
         </section>
+        <section class="setting-group">
+          <h2>站点级策略</h2>
+          <p class="section-copy">“仅手动”阻止自动休眠但允许你主动操作；“仅原生卸载”在该站使用 Chrome 原生卸载，切回时会自动加载。</p>
+          <label class="field-label" for="manual-domains"><span>仅手动管理</span><textarea id="manual-domains" rows="3" spellcheck="false" placeholder="docs.example.com"></textarea></label>
+          <label class="field-label" for="native-discard-domains"><span>仅原生卸载</span><textarea id="native-discard-domains" rows="3" spellcheck="false" placeholder="news.example.com"></textarea></label>
+        </section>
+        <section class="setting-group">
+          <h2>跨设备元数据</h2>
+          <p class="section-copy">同步工作区和站点策略，不同步当前会话、休眠恢复记录、最近关闭、AI 缓存或诊断。冲突会保留为同步副本。</p>
+          <div class="backup-actions"><button id="sync-metadata" type="button">同步工作区和策略</button><span id="sync-feedback" role="status"></span></div>
+        </section>
         <div class="actions"><button type="submit">保存设置</button><span id="saved" role="status"></span></div>
       </form>
       <section class="privacy-note">

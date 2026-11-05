@@ -1,6 +1,6 @@
 import { ALARM_NAME, ALARM_PERIOD_MINUTES, CHECKPOINT_ALARM_NAME, CHECKPOINT_PERIOD_MINUTES, RESOURCE_REVIEW_ALARM_NAME, SUSPENDED_PAGE, SUSPENSION_MODES, SUSPENSION_STATES, SUSPENSION_STRATEGIES } from "../shared/constants.js";
-import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isIdleLongEnough, isSuspendableUrl, isSuspendedUrl, normalizeDomain, planLocalOrganization, smartSuspensionBlockReason, suspensionBlockReason } from "../shared/policy.js";
-import { addRecentSuspension, addRecoveryCheckpoint, addWorkspace, clearDiagnostics, clearLocalHistory, getActivity, getDiagnostics, getObservedAt, getRecentSuspensions, getRecord, getRecords, getRecoveryCheckpoints, getResourceReviews, getResourceSnapshots, getSettings, getWorkspaces, migrateStorage, putRecord, removeActivity, removePrimaryRecord, removeRecentSuspension, removeRecord, removeRecordsForTab, removeResourceSnapshot, reportDiagnostic, saveResourceSnapshots, saveSettings, touchTab } from "../shared/storage.js";
+import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isIdleLongEnough, isSuspendableUrl, isSuspendedUrl, normalizeDomain, planLocalOrganization, sitePolicyForUrl, smartSuspensionBlockReason, suspensionBlockReason } from "../shared/policy.js";
+import { addRecentSuspension, addRecoveryCheckpoint, addWorkspace, clearDiagnostics, clearLocalHistory, getActivity, getDiagnostics, getObservedAt, getRecentSuspensions, getRecord, getRecords, getRecoveryCheckpoints, getResourceReviews, getResourceSnapshots, getSettings, getWorkspaces, migrateStorage, putRecord, removeActivity, removePrimaryRecord, removeRecentSuspension, removeRecord, removeRecordsForTab, removeResourceSnapshot, reportDiagnostic, saveResourceSnapshots, saveSettings, syncMetadata, touchTab } from "../shared/storage.js";
 import { buildSuspendCandidate, createPageIndex } from "../shared/search.js";
 import { buildHeapDiagnostics, buildRendererDiagnostics, summarizeHeapSnapshots } from "../shared/resource.js";
 import { buildResourceReclaimPlan } from "../shared/insights.js";
@@ -351,6 +351,8 @@ function sanitizeSettings(current, update) {
     suspensionStrategy: update.suspensionStrategy === SUSPENSION_STRATEGIES.NATIVE_DISCARD || update.suspensionStrategy === SUSPENSION_STRATEGIES.PLACEHOLDER
       ? update.suspensionStrategy
       : current.suspensionStrategy,
+    manualDomains: Array.isArray(update.manualDomains) ? normalizeList(update.manualDomains) : current.manualDomains,
+    nativeDiscardDomains: Array.isArray(update.nativeDiscardDomains) ? normalizeList(update.nativeDiscardDomains) : current.nativeDiscardDomains,
     semanticSearch: typeof update.semanticSearch === "boolean" ? update.semanticSearch : current.semanticSearch,
     aiProvider: update.aiProvider === "ollama" || update.aiProvider === "browser" ? update.aiProvider : current.aiProvider,
     ollamaEndpoint: typeof update.ollamaEndpoint === "string"
@@ -527,7 +529,7 @@ async function suspendTab(tabId, reason = "manual", allowProtected = false, expe
       }
 
       let mode = SUSPENSION_STRATEGIES.PLACEHOLDER;
-      if (settings.suspensionStrategy === SUSPENSION_STRATEGIES.NATIVE_DISCARD) {
+      if (sitePolicyForUrl(tab.url, settings) === "native" || settings.suspensionStrategy === SUSPENSION_STRATEGIES.NATIVE_DISCARD) {
         const discarded = await chrome.tabs.discard(tabId);
         if (!discarded?.discarded) {
           await removeRecord(recordId);
@@ -1284,6 +1286,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     getDiagnostics,
     clearDiagnostics: async () => { await clearDiagnostics(); return { ok: true }; },
     clearLocalHistory: async () => { await clearLocalHistory(); return { ok: true }; },
+    syncMetadata,
     prepareBudgetReclaim: () => prepareBudgetReclaim(sender),
     confirmBudgetReclaim: () => confirmBudgetReclaim(message, sender),
     startBudgetReclaim: () => confirmBudgetReclaim(message, sender, false),

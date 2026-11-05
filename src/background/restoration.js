@@ -1,6 +1,7 @@
 import { getWorkspaces, getRecoveryCheckpoints, getRecords, putRecord, queueStorage } from "../shared/storage.js";
 import { sourceState, selectedRestorePages } from "../shared/restoration.js";
 import { mapConcurrent } from "../shared/scanning.js";
+import { appendRestoreAudit } from "../shared/restore-audit.js";
 
 const KEY = "restorePreviews";
 
@@ -47,6 +48,7 @@ export function createRestorer(markWorkspace) {
     const { restoreTasks = [] } = await chrome.storage.session.get("restoreTasks");
     await chrome.storage.session.set({ restoreTasks: restoreTasks.map((task) => active.has(task.status) ? {
       ...task, status: "interrupted", updatedAt: Date.now(),
+      audit: appendRestoreAudit(task.audit, "interrupted", { reason: "worker restart" }),
       results: task.results.map((item) => item.status === "opening" ? { ...item, status: "uncertain", reason: "恢复中断，页面是否已打开需要重新检查。" } : item)
     } : task) });
   });
@@ -184,12 +186,12 @@ export function createRestorer(markWorkspace) {
     });
     run(async () => {
       try {
-        await mutate(task.id, (item) => { if (item.status === "queued") item.status = "running"; });
+        await mutate(task.id, (item) => { if (item.status === "queued") { item.status = "running"; item.audit = appendRestoreAudit(item.audit, "started", { total: item.total }); } });
         const result = await restore(task.kind, source, task.indices, task.skipExisting, task.windowId, task.restoreLayout, task.id);
-        await mutate(task.id, (item) => { item.status = item.status === "stopping" ? "stopped" : "completed"; item.layoutErrors = result.layoutErrors; });
+        await mutate(task.id, (item) => { item.status = item.status === "stopping" ? "stopped" : "completed"; item.layoutErrors = result.layoutErrors; item.audit = appendRestoreAudit(item.audit, item.status, { count: result.count, skipped: result.skipped, failed: result.failed }); });
       } catch (error) {
         await mutate(task.id, (item) => {
-          item.status = "interrupted"; item.reason = error.message;
+          item.status = "interrupted"; item.reason = error.message; item.audit = appendRestoreAudit(item.audit, "interrupted", { reason: error.message });
           item.results = item.results.map((page) => page.status === "opening" ? { ...page, status: "uncertain" } : page);
         });
       }

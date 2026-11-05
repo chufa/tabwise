@@ -42,6 +42,14 @@ export function isIdleLongEnough(activity, tabId, thresholdMs, now = Date.now())
   return Boolean(lastActive && now - lastActive >= thresholdMs);
 }
 
+export function sitePolicyForUrl(url, settings = {}) {
+  const domain = domainForUrl(url);
+  if (matchesDomain(domain, settings.blockedDomains || [])) return "never";
+  if (matchesDomain(domain, settings.manualDomains || [])) return "manual";
+  if (matchesDomain(domain, settings.nativeDiscardDomains || [])) return "native";
+  return matchesDomain(domain, settings.trustedDomains || []) ? "auto" : "manual";
+}
+
 export function suspensionBlockReason(tab, settings, extensionOrigin) {
   if (!tab?.id) return "Tab is unavailable";
   if (tab.active) return "Active tab";
@@ -52,9 +60,9 @@ export function suspensionBlockReason(tab, settings, extensionOrigin) {
   if (!isSuspendableUrl(tab.url)) return "Not a web page";
   if (isSuspendedUrl(tab.url, extensionOrigin)) return "Already suspended";
 
-  const domain = domainForUrl(tab.url);
-  if (matchesDomain(domain, settings.blockedDomains || [])) return "Never suspend domain";
-  if (!matchesDomain(domain, settings.trustedDomains || [])) return "Untrusted domain";
+  const policy = sitePolicyForUrl(tab.url, settings);
+  if (policy === "never") return "Never suspend domain";
+  if (policy === "manual") return matchesDomain(domainForUrl(tab.url), settings.manualDomains || []) ? "Site policy: manual" : "Untrusted domain";
   return "";
 }
 
@@ -70,6 +78,7 @@ export function smartSuspensionBlockReason(tab, settings, extensionOrigin, prote
 
   const domain = domainForUrl(tab.url);
   if (matchesDomain(domain, settings.blockedDomains || [])) return "Never suspend domain";
+  if (matchesDomain(domain, settings.manualDomains || [])) return "Site policy: manual";
   if (!protection?.ready) return "Protection status unknown";
   if (protection.dirty) return "Unsaved edits";
   if (protection.upload) return "Upload in progress";

@@ -27,6 +27,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   closedHistoryDays: 7,
   trustedDomains: [],
   blockedDomains: [],
+  manualDomains: [],
+  nativeDiscardDomains: [],
   pauseUntil: 0
 });
 

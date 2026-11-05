@@ -195,6 +195,22 @@ export async function getAllWorkspaces() {
   return workspaces;
 }
 
+export async function syncMetadata() {
+  const [workspaces, settings] = await Promise.all([getWorkspaces(), getSettings()]);
+  const { buildSyncMetadata, mergeSyncMetadata } = await import("./sync-metadata.js");
+  const local = buildSyncMetadata({ workspaces, settings });
+  const { tabwiseMetadata } = await chrome.storage.sync.get("tabwiseMetadata");
+  if (!tabwiseMetadata) {
+    await chrome.storage.sync.set({ tabwiseMetadata: local });
+    return { ok: true, direction: "uploaded", conflicts: 0 };
+  }
+  const merged = mergeSyncMetadata(workspaces, tabwiseMetadata.workspaces || []);
+  await changeWorkspaces(() => merged.workspaces);
+  await changeSettings((current) => ({ ...current, ...(tabwiseMetadata.sitePolicies || {}) }));
+  await chrome.storage.sync.set({ tabwiseMetadata: buildSyncMetadata({ workspaces: merged.workspaces, settings: { ...settings, ...(tabwiseMetadata.sitePolicies || {}) } }) });
+  return { ok: true, direction: "merged", conflicts: merged.conflicts };
+}
+
 export async function getWorkspaces() {
   return (await getAllWorkspaces()).filter((workspace) => !workspace.deletedAt);
 }

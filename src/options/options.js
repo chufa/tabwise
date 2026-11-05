@@ -30,6 +30,8 @@ async function load() {
   syncOllamaConfig();
   $("#trusted-domains").value = settings.trustedDomains.join("\n");
   $("#blocked-domains").value = settings.blockedDomains.join("\n");
+  $("#manual-domains").value = (settings.manualDomains || []).join("\n");
+  $("#native-discard-domains").value = (settings.nativeDiscardDomains || []).join("\n");
 }
 
 $("#settings-form").addEventListener("submit", async (event) => {
@@ -71,11 +73,25 @@ $("#settings-form").addEventListener("submit", async (event) => {
       ollamaEndpoint: $("#ollama-endpoint").value,
       ollamaModel: $("#ollama-model").value,
       trustedDomains: lines($("#trusted-domains").value),
-      blockedDomains: lines($("#blocked-domains").value)
+      blockedDomains: lines($("#blocked-domains").value),
+      manualDomains: lines($("#manual-domains").value),
+      nativeDiscardDomains: lines($("#native-discard-domains").value)
     }
   });
   $("#saved").textContent = "已保存";
   setTimeout(() => { $("#saved").textContent = ""; }, 1600);
+});
+
+$("#sync-metadata").addEventListener("click", async () => {
+  const button = $("#sync-metadata");
+  button.disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "syncMetadata" });
+    if (!result.ok) throw new Error(result.reason);
+    $("#sync-feedback").textContent = result.direction === "uploaded" ? "已创建首个跨设备元数据副本。" : `已同步并合并${result.conflicts ? ` · 保留 ${result.conflicts} 个冲突副本` : ""}。`;
+    await load();
+  } catch (error) { $("#sync-feedback").textContent = error.message; }
+  finally { button.disabled = false; }
 });
 
 function syncOllamaConfig() {
