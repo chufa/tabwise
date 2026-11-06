@@ -81,6 +81,21 @@ function setFeedback(message = "", isError = false) {
   feedback.textContent = message;
   feedback.classList.toggle("is-error", isError);
 }
+function renderLifecycle(items = []) {
+  const labels = { active: "活动中", open: "已打开", idle: "已闲置", suggested: "建议休眠", suspended: "休眠中", archived: "已归档" };
+  const order = ["active", "open", "idle", "suggested", "suspended", "archived"];
+  const counts = Object.fromEntries(order.map((state) => [state, items.filter((item) => item.state === state)]));
+  updateHTML($("#lifecycle"), order.filter((state) => counts[state].length).map((state) => `<div class="lifecycle-state">
+    <span>${labels[state]}</span><strong>${counts[state].length}</strong></div>`).join("") || "暂无可展示的页面状态。");
+}
+function renderHealth(health) {
+  const storage = health?.storage || {}, restore = health?.restore || {}, sync = health?.sync || {};
+  const size = Number.isFinite(storage.bytesInUse) ? `${Math.round(storage.bytesInUse / 1024 / 1024 * 10) / 10} / ${Math.round(storage.quotaBytes / 1024 / 1024)} MB` : "不可用";
+  const status = storage.level === "critical" ? "接近上限" : storage.level === "warning" ? "需要关注" : "正常";
+  updateHTML($("#health"), `<div><span>本地存储</span><strong>${escapeHtml(size)}</strong><small>${status}</small></div>
+    <div><span>同步版本</span><strong>v${sync.revision || 0}</strong><small>${sync.updatedAt ? relativeTime(sync.updatedAt) : "尚未同步"}</small></div>
+    <div><span>恢复任务</span><strong>${restore.pending || 0}</strong><small>${restore.pending ? "可从任务中心继续" : "无待处理任务"}</small></div>`);
+}
 
 function pageRow(page) {
   const sourceLabels = { open: "打开页面", suspended: "休眠记录", workspace: "工作区", checkpoint: "恢复点", closed: "最近关闭" };
@@ -168,11 +183,11 @@ function renderDiagnostics(result) {
 }
 
 async function refreshDashboard() {
-  const [data, workspaces, trash, recent, checkpoints, reviews, operations, closed] = await Promise.all([
+  const [data, workspaces, trash, recent, checkpoints, reviews, operations, closed, health] = await Promise.all([
     chrome.runtime.sendMessage({ type: "getDashboard" }), chrome.runtime.sendMessage({ type: "getWorkspaces" }),
     chrome.runtime.sendMessage({ type: "getWorkspaceTrash" }), chrome.runtime.sendMessage({ type: "getRecentSuspensions" }),
     chrome.runtime.sendMessage({ type: "getRecoveryCheckpoints" }), chrome.runtime.sendMessage({ type: "getResourceReviews" }),
-    chrome.runtime.sendMessage({ type: "getOperations" }), chrome.runtime.sendMessage({ type: "getClosedPages" })
+    chrome.runtime.sendMessage({ type: "getOperations" }), chrome.runtime.sendMessage({ type: "getClosedPages" }), chrome.runtime.sendMessage({ type: "getHealth" })
   ]);
   dashboard = data;
   budgetUI.update(data.budget);
@@ -196,6 +211,8 @@ async function refreshDashboard() {
   $("#overview-eligible").textContent = summary.eligible;
   $("#overview-suspended").textContent = summary.unloaded;
   $("#overview-heap").textContent = formatMemory(summary.jsHeapUsage);
+  renderHealth(health);
+  renderLifecycle(data.lifecycle);
   $("#sampling-coverage").textContent = `已采样 ${summary.jsHeapMeasuredTabs} / ${summary.jsHeapEligibleTabs} 个网页。每分钟轮转最多 25 页，同时测量不超过 4 页；立即更新可采样全部。JS 堆为估算值。`;
   if (!aiPrepared && !aiBusy) $("#ai-status").textContent = settings.aiProvider === "ollama" ? "Ollama" : "浏览器内置";
   $("#measure-resources").textContent = "立即更新";

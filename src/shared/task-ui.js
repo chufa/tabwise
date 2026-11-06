@@ -19,6 +19,7 @@ export function createTaskUI(host, feedback, refresh) {
       ${task.reason ? `<p>${escapeHtml(task.reason)}</p>` : ""}
       <div class="saved-actions"><button type="button" data-task="details">查看详情</button>
       ${["queued", "running"].includes(task.status) ? '<button type="button" data-task="stop">停止后续批次</button>' : ""}
+      ${task.resumable ? '<button type="button" data-task="resume">继续未完成页面</button>' : ""}
       ${task.retryable ? '<button type="button" data-task="retry">重试未完成页面</button>' : ""}</div></article>`).join("") || '<p class="saved-hint">暂无任务。</p>');
     if (!selected) return;
     const task = await chrome.runtime.sendMessage({ type: "getTask", taskId: selected, offset });
@@ -42,9 +43,10 @@ export function createTaskUI(host, feedback, refresh) {
       else if (action === "next") offset += 50;
       else if (action === "close") { selected = null; host.querySelector(".task-detail").hidden = true; }
       else {
-        const result = await chrome.runtime.sendMessage({ type: action === "stop" ? "stopTask" : "retryTask", taskId: id });
+        const type = action === "stop" ? "stopTask" : action === "resume" ? "resumeRestoreTask" : "retryTask";
+        const result = await chrome.runtime.sendMessage({ type, taskId: id });
         if (!result.ok) throw new Error(result.reason);
-        feedback(action === "stop" ? "已请求停止后续批次" : "已创建重试任务");
+        feedback(action === "stop" ? "已请求停止后续批次" : action === "resume" ? "已创建续跑任务" : "已创建重试任务");
         if (result.taskId) { selected = result.taskId; offset = 0; }
       }
       await update();

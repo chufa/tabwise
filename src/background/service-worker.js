@@ -1,6 +1,6 @@
 import { ALARM_NAME, ALARM_PERIOD_MINUTES, CHECKPOINT_ALARM_NAME, CHECKPOINT_PERIOD_MINUTES, RESOURCE_REVIEW_ALARM_NAME, SUSPENDED_PAGE, SUSPENSION_MODES, SUSPENSION_STATES, SUSPENSION_STRATEGIES } from "../shared/constants.js";
 import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isIdleLongEnough, isSuspendableUrl, isSuspendedUrl, normalizeDomain, planLocalOrganization, sitePolicyForUrl, smartSuspensionBlockReason, suspensionBlockReason } from "../shared/policy.js";
-import { addRecentSuspension, addRecoveryCheckpoint, addWorkspace, clearDiagnostics, clearLocalHistory, getActivity, getDiagnostics, getObservedAt, getRecentSuspensions, getRecord, getRecords, getRecoveryCheckpoints, getResourceReviews, getResourceSnapshots, getSettings, getWorkspaces, migrateStorage, putRecord, removeActivity, removePrimaryRecord, removeRecentSuspension, removeRecord, removeRecordsForTab, removeResourceSnapshot, reportDiagnostic, saveResourceSnapshots, saveSettings, syncMetadata, touchTab } from "../shared/storage.js";
+import { addRecentSuspension, addRecoveryCheckpoint, addWorkspace, applySyncMetadata, clearDiagnostics, clearLocalHistory, getActivity, getDiagnostics, getObservedAt, getRecentSuspensions, getRecord, getRecords, getRecoveryCheckpoints, getResourceReviews, getResourceSnapshots, getSettings, getSyncHistory, getWorkspaces, migrateStorage, previewSyncMetadata, putRecord, removeActivity, removePrimaryRecord, removeRecentSuspension, removeRecord, removeRecordsForTab, removeResourceSnapshot, reportDiagnostic, restoreSyncHistory, saveResourceSnapshots, saveSettings, syncMetadata, touchTab } from "../shared/storage.js";
 import { buildSuspendCandidate, createPageIndex } from "../shared/search.js";
 import { buildHeapDiagnostics, buildRendererDiagnostics, summarizeHeapSnapshots } from "../shared/resource.js";
 import { buildResourceReclaimPlan } from "../shared/insights.js";
@@ -21,6 +21,8 @@ import { createWorkspaceUpdates } from "./workspace-updates.js";
 import { buildBudget, updateHeapHistory } from "../shared/budget.js";
 import { createBackupManager } from "./backup.js";
 import { createBatchRunner } from "../shared/batch.js";
+import { buildLifecycle } from "../shared/lifecycle.js";
+import { buildHealth } from "../shared/health.js";
 
 const extensionOrigin = chrome.runtime.getURL("").replace(/\/$/, "");
 const reportWorkerError = (error) => reportDiagnostic({ source: "service-worker", message: error?.message || String(error) }).catch(() => {});
@@ -678,7 +680,7 @@ async function restoreCheckpoint(checkpointId) {
 
 async function getDashboard() {
   await refreshResourceSnapshots();
-  const [settings, records, tabs, activity, observedAt, protectionStates, resourceSnapshots] = await Promise.all([getSettings(), getRecords(), chrome.tabs.query({}), getActivity(), getObservedAt(), getProtectionStates(), getResourceSnapshots()]);
+  const [settings, records, tabs, activity, observedAt, protectionStates, resourceSnapshots, workspaces] = await Promise.all([getSettings(), getRecords(), chrome.tabs.query({}), getActivity(), getObservedAt(), getProtectionStates(), getResourceSnapshots(), getWorkspaces()]);
   const recordsByTab = new Map(Object.values(records).map((record) => [record.tabId, record]));
   const rows = tabs.map((tab) => {
     const record = recordsByTab.get(tab.id);
@@ -733,7 +735,18 @@ async function getDashboard() {
       reclaimableMeasuredTabs: reclaimPlan.reclaimableMeasuredTabs
     },
     candidates: reclaimPlan.candidates
+    ,
+    lifecycle: buildLifecycle({ tabs: rows, activity, idleThresholdMs: settings.idleMinutes * 60_000, candidates: reclaimPlan.candidates, records, workspaces })
   };
+}
+
+async function getHealth() {
+  const [history, tasks, bytesInUse] = await Promise.all([
+    getSyncHistory(),
+    restorer.list(),
+    typeof chrome.storage.local.getBytesInUse === "function" ? chrome.storage.local.getBytesInUse(null) : Promise.resolve(0)
+  ]);
+  return buildHealth({ bytesInUse, quotaBytes: chrome.storage.local.QUOTA_BYTES || 10 * 1024 * 1024, sync: history[0], restoreTasks: tasks });
 }
 
 async function prepareBudgetReclaim(sender) {
@@ -1283,10 +1296,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   const tasks = {
     getDashboard,
+    getHealth,
     getDiagnostics,
     clearDiagnostics: async () => { await clearDiagnostics(); return { ok: true }; },
     clearLocalHistory: async () => { await clearLocalHistory(); return { ok: true }; },
     syncMetadata,
+    previewSyncMetadata,
+    applySyncMetadata: () => applySyncMetadata(message.resolutions),
+    getSyncHistory,
+    restoreSyncHistory: () => restoreSyncHistory(message.historyId),
     prepareBudgetReclaim: () => prepareBudgetReclaim(sender),
     confirmBudgetReclaim: () => confirmBudgetReclaim(message, sender),
     startBudgetReclaim: () => confirmBudgetReclaim(message, sender, false),
@@ -1298,6 +1316,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     getTask: () => taskDetail(message),
     stopTask: async () => (await batchRunner.list()).some((task) => task.id === message.taskId) ? batchRunner.stop(message.taskId) : restorer.stop(message.taskId),
     retryTask: async () => (await batchRunner.list()).some((task) => task.id === message.taskId) ? batchRunner.retry(message.taskId) : restorer.retry(message.taskId),
+    resumeRestoreTask: () => restorer.resume(message.taskId),
     getResourceDiagnostics,
     getOperations: async () => (await getOperations()).map(({ id, label, createdAt, status, results, items }) => ({ id, label, createdAt, status, results, count: items.length })),
     undoOperation: () => runOperation(() => journal.undo(message.operationId)),
@@ -1347,15 +1366,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     runResourceReview: () => runResourceReview("manual"),
     restoreRecentSuspension: () => restoreRecentSuspension(message.recordId),
     restoreCheckpoint: () => restoreCheckpoint(message.checkpointId),
-    exportBackup: () => backups.export(),
-    prepareBackupImport: () => backups.prepare(message.backup, sender),
+    exportBackup: () => backups.export(message),
+    prepareBackupImport: () => backups.prepare(message.backup, sender, message.password),
     confirmBackupImport: async () => {
       const result = await runOperation(() => backups.confirm(message, sender));
       if (message.includeSettings) await scheduleResourceReview();
       return result;
     },
     importBackup: async () => {
-      const result = await runOperation(() => backups.import(message.backup));
+      const result = await runOperation(() => backups.import(message.backup, message.password));
       if (result.ok) await scheduleResourceReview();
       return result;
     },

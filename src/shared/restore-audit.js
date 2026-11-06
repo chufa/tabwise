@@ -11,3 +11,7 @@ export function restoreAuditSummary(audit = []) {
     state: ["interrupted", "conflict", "failed"].includes(last?.type) ? "needs-review" : last?.type === "completed" ? "confirmed" : "in-progress"
   };
 }
+
+export function resumeRestoreIndices(results = []) {
+  return results.filter((item) => ["pending", "failed", "closed"].includes(item.status)).map((item) => item.index);
+}

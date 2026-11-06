@@ -1,6 +1,7 @@
 import { escapeHtml } from "../shared/html.js";
 import { OLLAMA_PROBE_SCHEMA, validateOllamaProbe } from "../shared/ollama.js";
 import { BACKUP_LIMITS } from "../shared/backup.js";
+import { SITE_RISK_TEMPLATES, applySiteRiskTemplate } from "../shared/policy.js";
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -32,6 +33,14 @@ async function load() {
   $("#blocked-domains").value = settings.blockedDomains.join("\n");
   $("#manual-domains").value = (settings.manualDomains || []).join("\n");
   $("#native-discard-domains").value = (settings.nativeDiscardDomains || []).join("\n");
+  await renderSyncHistory();
+}
+
+async function renderSyncHistory() {
+  const history = await chrome.runtime.sendMessage({ type: "getSyncHistory" });
+  $("#sync-history").innerHTML = Array.isArray(history) && history.length
+    ? history.slice(0, 5).map((entry) => `<article class="sync-history-item"><span><strong>版本 ${entry.revision}</strong><small>${new Date(entry.at).toLocaleString()} · ${entry.action === "restored" ? "已回滚" : entry.action === "uploaded" ? "首次同步" : "已合并"} · ${entry.summary.workspaces} 个工作区</small></span><button type="button" data-history-id="${escapeHtml(entry.id)}">恢复此版本</button></article>`).join("")
+    : "<p>尚无同步历史。</p>";
 }
 
 $("#settings-form").addEventListener("submit", async (event) => {
@@ -86,12 +95,69 @@ $("#sync-metadata").addEventListener("click", async () => {
   const button = $("#sync-metadata");
   button.disabled = true;
   try {
-    const result = await chrome.runtime.sendMessage({ type: "syncMetadata" });
+    const result = await chrome.runtime.sendMessage({ type: "previewSyncMetadata" });
     if (!result.ok) throw new Error(result.reason);
-    $("#sync-feedback").textContent = result.direction === "uploaded" ? "已创建首个跨设备元数据副本。" : `已同步并合并${result.conflicts ? ` · 保留 ${result.conflicts} 个冲突副本` : ""}。`;
+    if (result.direction === "upload") {
+      const applied = await chrome.runtime.sendMessage({ type: "applySyncMetadata", resolutions: {} });
+      if (!applied.ok) throw new Error(applied.reason);
+      $("#sync-feedback").textContent = "已创建首个跨设备元数据副本。";
+    } else {
+      const conflicts = result.conflicts || [];
+      $("#sync-preview").innerHTML = `<h3>同步预览</h3>${conflicts.length ? conflicts.map((item) => `<label class="sync-conflict">
+        <span><strong>${escapeHtml(item.kind === "workspace" ? item.name : item.key)}</strong><small>${item.kind === "workspace" ? "两台设备的工作区内容不同" : "两台设备的站点策略不同"}</small></span>
+        <select data-sync-conflict="${escapeHtml(item.id)}"><option value="local">保留本机版本</option><option value="remote">采用同步版本</option>${item.kind === "workspace" ? '<option value="copy" selected>保留两个副本</option>' : ""}</select></label>`).join("") : "<p>没有冲突；确认后会合并新增元数据。</p>"}
+        <div class="backup-actions"><button type="button" data-sync="apply">确认同步</button><button type="button" data-sync="cancel">取消</button></div>`;
+      $("#sync-preview").hidden = false;
+      $("#sync-feedback").textContent = "已生成同步预览，确认后才会写入。";
+    }
+  } catch (error) { $("#sync-feedback").textContent = error.message; }
+  finally { button.disabled = false; }
+});
+$("#sync-preview").addEventListener("click", async (event) => {
+  const action = event.target.closest("[data-sync]")?.dataset.sync;
+  if (!action) return;
+  if (action === "cancel") { $("#sync-preview").hidden = true; return; }
+  const resolutions = Object.fromEntries([...document.querySelectorAll("[data-sync-conflict]")].map((input) => [input.dataset.syncConflict, input.value]));
+  const result = await chrome.runtime.sendMessage({ type: "applySyncMetadata", resolutions });
+  if (!result.ok) { $("#sync-feedback").textContent = result.reason; return; }
+  $("#sync-preview").hidden = true;
+  $("#sync-feedback").textContent = `已同步${result.conflicts ? `；已处理 ${result.conflicts} 个冲突` : ""}。`;
+  await load();
+});
+$("#sync-history").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-history-id]");
+  if (!button) return;
+  if (!button.dataset.confirm) {
+    button.dataset.confirm = "true";
+    button.textContent = "确认恢复";
+    $("#sync-feedback").textContent = "将用所选版本覆盖当前工作区与站点策略；再次点击确认。";
+    return;
+  }
+  button.disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "restoreSyncHistory", historyId: button.dataset.historyId });
+    if (!result.ok) throw new Error(result.reason);
+    $("#sync-feedback").textContent = `已恢复版本，并创建版本 ${result.revision}。`;
     await load();
   } catch (error) { $("#sync-feedback").textContent = error.message; }
   finally { button.disabled = false; }
+});
+
+$("#site-template").innerHTML = '<option value="">选择风险模板</option>' + SITE_RISK_TEMPLATES.map((template) => `<option value="${template.id}">${escapeHtml(template.label)}</option>`).join("");
+$("#apply-site-template").addEventListener("click", () => {
+  const id = $("#site-template").value;
+  if (!id) return;
+  const template = SITE_RISK_TEMPLATES.find((item) => item.id === id);
+  const domains = lines($("#template-domains").value);
+  const current = {
+    trustedDomains: lines($("#trusted-domains").value), blockedDomains: lines($("#blocked-domains").value),
+    manualDomains: lines($("#manual-domains").value), nativeDiscardDomains: lines($("#native-discard-domains").value)
+  };
+  const next = applySiteRiskTemplate(current, template.id, domains.length ? domains : template.domains);
+  $("#blocked-domains").value = next.blockedDomains.join("\n");
+  $("#manual-domains").value = next.manualDomains.join("\n");
+  $("#native-discard-domains").value = next.nativeDiscardDomains.join("\n");
+  $("#template-feedback").textContent = `已填入${template.label}模板；请保存设置后生效。`;
 });
 
 function syncOllamaConfig() {
@@ -143,7 +209,8 @@ $("#test-browser-model").addEventListener("click", async () => {
 
 $("#export-backup").addEventListener("click", async () => {
   try {
-  const backup = await chrome.runtime.sendMessage({ type: "exportBackup" });
+  const password = $("#backup-password").value;
+  const backup = await chrome.runtime.sendMessage({ type: "exportBackup", password });
   if (backup.ok === false) throw new Error(backup.reason);
   const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" }));
   const link = document.createElement("a");
@@ -151,7 +218,7 @@ $("#export-backup").addEventListener("click", async () => {
   link.download = `tabwise-backup-${new Date().toISOString().slice(0, 10)}.json`;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-  $("#backup-feedback").textContent = `已导出 ${backup.integrity.counts.workspaces} 个工作区 · SHA-256 校验码已附带`;
+  $("#backup-feedback").textContent = `已导出 ${backup.integrity.counts.workspaces} 个工作区 · ${password ? "AES-GCM 加密与" : ""}SHA-256 校验码已附带`;
   } catch (error) { $("#backup-feedback").textContent = error.message; }
 });
 
@@ -193,11 +260,13 @@ $("#import-backup").addEventListener("change", async (event) => {
   try {
     if (file.size > BACKUP_LIMITS.bytes) throw new Error("备份大小超过 8 MiB 上限。");
     const backup = JSON.parse(await file.text());
-    const result = await chrome.runtime.sendMessage({ type: "prepareBackupImport", backup });
+    const result = await chrome.runtime.sendMessage({ type: "prepareBackupImport", backup, password: $("#backup-password").value });
     if (version !== backupVersion) return;
     if (!result.ok) throw new Error(result.reason);
     backupPreviewId = result.previewId;
-    $("#backup-feedback").textContent = result.verified ? "完整性校验通过，等待确认导入。" : "旧版备份，请核对内容后导入。";
+    $("#backup-feedback").textContent = result.verified
+      ? result.encrypted ? "密码与完整性校验通过；恢复演练未写入任何数据，等待确认导入。" : "完整性校验通过，等待确认导入。"
+      : "旧版备份，请核对内容后导入。";
     $("#backup-preview").innerHTML = `<h3>导入预览</h3>
       <p>${result.counts.pages} 页 · ${result.counts.windows} 个窗口 · ${result.counts.versions} 个历史版本</p>
       ${result.warnings.map((warning) => `<p>${escapeHtml(warning)}</p>`).join("")}

@@ -20,7 +20,8 @@ const keys = Object.freeze({
   resourceSnapshots: "resourceSnapshots",
   activity: "lastActivity",
   observedAt: "firstObservedAt",
-  workspaces: "workspaces"
+  workspaces: "workspaces",
+  syncHistory: "syncHistory"
 });
 
 export async function migrateStorage() {
@@ -195,20 +196,69 @@ export async function getAllWorkspaces() {
   return workspaces;
 }
 
-export async function syncMetadata() {
-  const [workspaces, settings] = await Promise.all([getWorkspaces(), getSettings()]);
-  const { buildSyncMetadata, mergeSyncMetadata } = await import("./sync-metadata.js");
-  const local = buildSyncMetadata({ workspaces, settings });
+export async function previewSyncMetadata() {
+  const [workspaces, settings, { syncRevision = 0 }] = await Promise.all([getWorkspaces(), getSettings(), chrome.storage.local.get("syncRevision")]);
+  const { buildSyncMetadata, planSyncMetadata } = await import("./sync-metadata.js");
+  const local = buildSyncMetadata({ workspaces, settings }, { revision: syncRevision });
   const { tabwiseMetadata } = await chrome.storage.sync.get("tabwiseMetadata");
   if (!tabwiseMetadata) {
-    await chrome.storage.sync.set({ tabwiseMetadata: local });
+    return { ok: true, direction: "upload", conflicts: [], local };
+  }
+  return { ok: true, direction: "merge", ...planSyncMetadata({ workspaces, settings }, tabwiseMetadata) };
+}
+
+export async function applySyncMetadata(resolutions = {}) {
+  const [workspaces, settings, { syncRevision = 0 }] = await Promise.all([getWorkspaces(), getSettings(), chrome.storage.local.get("syncRevision")]);
+  const { buildSyncMetadata, createSyncHistoryEntry, nextSyncRevision, planSyncMetadata, resolveSyncPlan } = await import("./sync-metadata.js");
+  const { tabwiseMetadata } = await chrome.storage.sync.get("tabwiseMetadata");
+  if (!tabwiseMetadata) {
+    const metadata = buildSyncMetadata({ workspaces, settings }, { revision: nextSyncRevision(syncRevision) });
+    await chrome.storage.sync.set({ tabwiseMetadata: metadata });
+    await saveSyncHistory(createSyncHistoryEntry(metadata, "uploaded"));
     return { ok: true, direction: "uploaded", conflicts: 0 };
   }
-  const merged = mergeSyncMetadata(workspaces, tabwiseMetadata.workspaces || []);
-  await changeWorkspaces(() => merged.workspaces);
-  await changeSettings((current) => ({ ...current, ...(tabwiseMetadata.sitePolicies || {}) }));
-  await chrome.storage.sync.set({ tabwiseMetadata: buildSyncMetadata({ workspaces: merged.workspaces, settings: { ...settings, ...(tabwiseMetadata.sitePolicies || {}) } }) });
-  return { ok: true, direction: "merged", conflicts: merged.conflicts };
+  const plan = planSyncMetadata({ workspaces, settings }, tabwiseMetadata);
+  const resolved = resolveSyncPlan(plan, resolutions);
+  await changeWorkspaces((existing) => [...resolved.workspaces, ...existing.filter((workspace) => workspace.deletedAt)]);
+  const nextSettings = await changeSettings((current) => ({ ...current, ...resolved.sitePolicies }));
+  const revision = nextSyncRevision(syncRevision, tabwiseMetadata.version?.revision);
+  const metadata = buildSyncMetadata({ workspaces: resolved.workspaces, settings: nextSettings }, { revision, parentRevision: tabwiseMetadata.version?.revision });
+  await chrome.storage.sync.set({ tabwiseMetadata: metadata });
+  await saveSyncHistory(createSyncHistoryEntry(metadata, "merged"));
+  return { ok: true, direction: "merged", conflicts: plan.conflicts.length };
+}
+
+export async function getSyncHistory() {
+  const { [keys.syncHistory]: history = [] } = await chrome.storage.local.get(keys.syncHistory);
+  return history.map(({ metadata, ...entry }) => entry);
+}
+
+async function saveSyncHistory(entry) {
+  return queueStorage("local", async () => {
+    const { [keys.syncHistory]: history = [] } = await chrome.storage.local.get(keys.syncHistory);
+    const next = [entry, ...history].slice(0, 20);
+    await chrome.storage.local.set({ [keys.syncHistory]: next, syncRevision: entry.revision });
+  });
+}
+
+export async function restoreSyncHistory(id) {
+  const { [keys.syncHistory]: history = [] } = await chrome.storage.local.get(keys.syncHistory);
+  const entry = history.find((item) => item.id === id);
+  if (!entry?.metadata) throw new Error("同步历史不存在或已过期。");
+  const { buildSyncMetadata, createSyncHistoryEntry, nextSyncRevision } = await import("./sync-metadata.js");
+  const { syncRevision = 0 } = await chrome.storage.local.get("syncRevision");
+  await changeWorkspaces((existing) => [...structuredClone(entry.metadata.workspaces || []), ...existing.filter((workspace) => workspace.deletedAt)]);
+  const settings = await changeSettings((current) => ({ ...current, ...(entry.metadata.sitePolicies || {}) }));
+  const metadata = buildSyncMetadata({ workspaces: entry.metadata.workspaces || [], settings }, { revision: nextSyncRevision(syncRevision, entry.revision), parentRevision: entry.revision });
+  await chrome.storage.sync.set({ tabwiseMetadata: metadata });
+  await saveSyncHistory(createSyncHistoryEntry(metadata, "restored"));
+  return { ok: true, revision: metadata.version.revision };
+}
+
+export async function syncMetadata() {
+  const preview = await previewSyncMetadata();
+  if (preview.direction === "upload") return applySyncMetadata();
+  return applySyncMetadata(Object.fromEntries((preview.conflicts || []).map((conflict) => [conflict.id, conflict.kind === "workspace" ? "copy" : "local"])));
 }
 
 export async function getWorkspaces() {

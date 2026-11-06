@@ -25,6 +25,15 @@
         <div><dt>休眠中</dt><dd id="overview-suspended">-</dd></div>
         <div><dt>JS 堆</dt><dd id="overview-heap">-</dd></div>
       </dl>
+      <section class="saved-tools" aria-label="扩展健康状态">
+        <div class="section-heading"><h2>健康状态</h2></div>
+        <div id="health" class="health-list">正在检查本地存储与任务状态。</div>
+      </section>
+      <section class="saved-tools" aria-label="标签生命周期">
+        <div class="section-heading"><h2>标签生命周期</h2></div>
+        <p class="hint">仅展示本地状态，不会恢复、关闭或移动任何页面。</p>
+        <div id="lifecycle" class="lifecycle-list">正在读取状态。</div>
+      </section>
       <label class="search-field" for="page-search">
         <span>查找页面</span>
         <input id="page-search" type="search" autocomplete="off" placeholder="例如：上周 React 性能文章">

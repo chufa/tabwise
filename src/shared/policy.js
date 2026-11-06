@@ -1,5 +1,12 @@
 import { SUSPENDED_PAGE } from "./constants.js";
 
+export const SITE_RISK_TEMPLATES = Object.freeze([
+  { id: "collaboration", label: "会议与协作", policy: "manual", domains: ["meet.google.com", "teams.microsoft.com", "zoom.us", "docs.google.com", "notion.so"] },
+  { id: "mail-payment", label: "邮箱与支付", policy: "never", domains: ["mail.google.com", "outlook.office.com", "paypal.com", "stripe.com"] },
+  { id: "development", label: "开发与 IDE", policy: "manual", domains: ["github.com", "gitlab.com", "codespaces.new", "stackblitz.com"] },
+  { id: "reading", label: "阅读与新闻", policy: "native", domains: ["medium.com", "news.ycombinator.com", "wikipedia.org"] }
+]);
+
 export function normalizeDomain(value) {
   return value.trim().toLowerCase().replace(/^\*\./, "").replace(/^www\./, "");
 }
@@ -48,6 +55,15 @@ export function sitePolicyForUrl(url, settings = {}) {
   if (matchesDomain(domain, settings.manualDomains || [])) return "manual";
   if (matchesDomain(domain, settings.nativeDiscardDomains || [])) return "native";
   return matchesDomain(domain, settings.trustedDomains || []) ? "auto" : "manual";
+}
+
+export function applySiteRiskTemplate(settings = {}, templateId, domains) {
+  const template = SITE_RISK_TEMPLATES.find((item) => item.id === templateId);
+  if (!template) throw new Error("站点模板不存在。");
+  const selected = [...new Set((domains || template.domains).map(normalizeDomain).filter(Boolean))];
+  const keys = { never: "blockedDomains", manual: "manualDomains", native: "nativeDiscardDomains" };
+  const key = keys[template.policy];
+  return { ...settings, [key]: [...new Set([...(settings[key] || []), ...selected])] };
 }
 
 export function suspensionBlockReason(tab, settings, extensionOrigin) {

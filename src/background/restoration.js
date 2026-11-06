@@ -1,9 +1,10 @@
 import { getWorkspaces, getRecoveryCheckpoints, getRecords, putRecord, queueStorage } from "../shared/storage.js";
 import { sourceState, selectedRestorePages } from "../shared/restoration.js";
 import { mapConcurrent } from "../shared/scanning.js";
-import { appendRestoreAudit } from "../shared/restore-audit.js";
+import { appendRestoreAudit, resumeRestoreIndices } from "../shared/restore-audit.js";
 
 const KEY = "restorePreviews";
+const DURABLE_TASK_KEY = "restoreTaskLedger";
 
 export async function logicalTabs() {
   const [tabs, records] = await Promise.all([chrome.tabs.query({}), getRecords()]);
@@ -46,11 +47,14 @@ export function createRestorer(markWorkspace) {
   const active = new Set(["queued", "running", "stopping"]);
   const ready = queueStorage("session", async () => {
     const { restoreTasks = [] } = await chrome.storage.session.get("restoreTasks");
-    await chrome.storage.session.set({ restoreTasks: restoreTasks.map((task) => active.has(task.status) ? {
+    const { [DURABLE_TASK_KEY]: durable = [] } = await chrome.storage.local.get(DURABLE_TASK_KEY);
+    const source = restoreTasks.length ? restoreTasks : durable;
+    const normalized = source.map((task) => active.has(task.status) ? {
       ...task, status: "interrupted", updatedAt: Date.now(),
       audit: appendRestoreAudit(task.audit, "interrupted", { reason: "worker restart" }),
       results: task.results.map((item) => item.status === "opening" ? { ...item, status: "uncertain", reason: "恢复中断，页面是否已打开需要重新检查。" } : item)
-    } : task) });
+    } : task);
+    await Promise.all([chrome.storage.session.set({ restoreTasks: normalized }), chrome.storage.local.set({ [DURABLE_TASK_KEY]: normalized })]);
   });
   ready.catch(console.error);
   async function readTasks() { await ready; return (await chrome.storage.session.get("restoreTasks")).restoreTasks || []; }
@@ -61,7 +65,7 @@ export function createRestorer(markWorkspace) {
       if (!task) throw new Error("恢复任务不存在。");
       work(task);
       task.updatedAt = Date.now();
-      await chrome.storage.session.set({ restoreTasks });
+      await Promise.all([chrome.storage.session.set({ restoreTasks }), chrome.storage.local.set({ [DURABLE_TASK_KEY]: restoreTasks })]);
       return task;
     });
   }
@@ -71,7 +75,8 @@ export function createRestorer(markWorkspace) {
     skipped: results.filter((item) => item.status === "skipped").length,
     failed: results.filter((item) => ["failed", "closed", "uncertain"].includes(item.status)).length,
     settled: results.filter((item) => !["pending", "opening"].includes(item.status)).length,
-    retryable: !active.has(task.status) && results.some((item) => ["failed", "closed", "uncertain", "pending"].includes(item.status))
+    retryable: !active.has(task.status) && results.some((item) => ["failed", "closed", "uncertain", "pending"].includes(item.status)),
+    resumable: !active.has(task.status) && resumeRestoreIndices(results).length > 0
   });
   async function detail(id, offset = 0) {
     const task = (await readTasks()).find((item) => item.id === id);
@@ -182,7 +187,8 @@ export function createRestorer(markWorkspace) {
     await queueStorage("session", async () => {
       const tasks = await readTasks();
       if (tasks.filter((item) => active.has(item.status)).length >= 5) throw new Error("请先完成或停止当前恢复任务。");
-      await chrome.storage.session.set({ restoreTasks: [task, ...tasks.filter((item) => active.has(item.status)), ...tasks.filter((item) => !active.has(item.status)).slice(0, 9 - tasks.filter((item) => active.has(item.status)).length)] });
+      const next = [task, ...tasks.filter((item) => active.has(item.status)), ...tasks.filter((item) => !active.has(item.status)).slice(0, 9 - tasks.filter((item) => active.has(item.status)).length)];
+      await Promise.all([chrome.storage.session.set({ restoreTasks: next }), chrome.storage.local.set({ [DURABLE_TASK_KEY]: next })]);
     });
     run(async () => {
       try {
@@ -215,6 +221,15 @@ export function createRestorer(markWorkspace) {
       const indices = task.results.filter((page) => ["failed", "closed", "uncertain", "pending"].includes(page.status)).map((page) => page.index);
       if (!indices.length) throw new Error("没有需要重试的页面。");
       return enqueue(source, { kind: task.kind, indices, skipExisting: true, windowId: task.windowId, restoreLayout: task.restoreLayout, retryOf: id });
+    },
+    async resume(id) {
+      const task = (await readTasks()).find((item) => item.id === id);
+      if (!task || active.has(task.status)) throw new Error("请先等待当前恢复任务结束。");
+      const source = await savedSource(task.kind, task.sourceId);
+      if (sourceState(source) !== task.signature) throw new Error("保存内容已变化，请重新预览。");
+      const indices = resumeRestoreIndices(task.results);
+      if (!indices.length) throw new Error("没有可以安全继续的页面。");
+      return enqueue(source, { kind: task.kind, indices, skipExisting: true, windowId: task.windowId, restoreLayout: task.restoreLayout, resumeOf: id });
     },
     start(message, sender) {
       return queueStorage("session", async () => {

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createBackup, readBackup, backupFingerprint, BACKUP_LIMITS } from "../src/shared/backup.js";
+import { createBackup, createEncryptedBackup, readBackup, backupFingerprint, BACKUP_LIMITS } from "../src/shared/backup.js";
 import { sanitizeSavedSnapshot } from "../src/shared/session.js";
 import { mergeWorkspaces } from "../src/shared/workspaces.js";
 
@@ -69,4 +69,15 @@ test("merging layout snapshots preserves window boundaries, duplicate occurrence
   const roundTrip = await readBackup(await createBackup({ workspaces: [merged] }));
   assert.equal(roundTrip.workspaces[0].mergeSources[0].versions.length, 1);
   assert.equal(a.tabs.length, 2);
+});
+
+test("encrypted backup requires its password and retains the verified backup payload", async () => {
+  const encrypted = await createEncryptedBackup({ settings: { idleMinutes: 30 }, workspaces: [workspace()], password: "correct horse battery staple", iterations: 10_000 });
+  assert.equal(encrypted.schemaVersion, 3);
+  assert.equal("payload" in encrypted, false);
+  await assert.rejects(readBackup(encrypted), /密码/);
+  await assert.rejects(readBackup(encrypted, "wrong password"), /密码错误/);
+  const decoded = await readBackup(encrypted, "correct horse battery staple");
+  assert.equal(decoded.verified, true);
+  assert.equal(decoded.workspaces[0].tabs.length, 1000);
 });

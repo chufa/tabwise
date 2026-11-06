@@ -1,4 +1,4 @@
-import { backupFingerprint, backupHash, createBackup, readBackup } from "../shared/backup.js";
+import { backupFingerprint, backupHash, createBackup, createEncryptedBackup, readBackup } from "../shared/backup.js";
 import { getAllWorkspaces, getSettings, getWorkspaces, queueStorage, validateWorkspaceCapacity } from "../shared/storage.js";
 
 export function createBackupManager(sanitizeSettings) {
@@ -40,15 +40,19 @@ export function createBackupManager(sanitizeSettings) {
     });
   }
   return {
-    async export() { return queueStorage("local", async () => createBackup({ settings: await getSettings(), workspaces: await getWorkspaces() })); },
-    async prepare(backup, sender) {
+    async export(options = {}) {
+      return queueStorage("local", async () => options.password
+        ? createEncryptedBackup({ settings: await getSettings(), workspaces: await getWorkspaces(), password: options.password })
+        : createBackup({ settings: await getSettings(), workspaces: await getWorkspaces() }));
+    },
+    async prepare(backup, sender, password) {
       if (!sender.documentId) throw new Error("请从设置页预览备份。");
-      const decoded = await readBackup(backup), existing = await getAllWorkspaces();
+      const decoded = await readBackup(backup, password), existing = await getAllWorkspaces();
       const id = crypto.randomUUID();
       for (const [key, preview] of previews) if (preview.expiresAt <= Date.now() || preview.owner === sender.documentId) previews.delete(key);
       if (previews.size >= 5) previews.delete(previews.keys().next().value);
       previews.set(id, { decoded, owner: sender.documentId, expiresAt: Date.now() + 5 * 60_000, signature: await contentState(existing) });
-      return { ok: true, previewId: id, verified: decoded.verified, warnings: decoded.warnings, counts: decoded.counts, workspaces: await describe(decoded, existing) };
+      return { ok: true, previewId: id, verified: decoded.verified, encrypted: Boolean(decoded.encrypted), warnings: decoded.warnings, counts: decoded.counts, workspaces: await describe(decoded, existing) };
     },
     async confirm(message, sender) {
       const preview = previews.get(message.previewId);
@@ -57,6 +61,6 @@ export function createBackupManager(sanitizeSettings) {
       previews.delete(message.previewId);
       return result;
     },
-    async import(backup) { return commit(await readBackup(backup), { includeSettings: true }); }
+    async import(backup, password) { return commit(await readBackup(backup, password), { includeSettings: true }); }
   };
 }

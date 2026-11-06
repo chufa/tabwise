@@ -3,16 +3,21 @@ let upload = false;
 let media = false;
 
 function report() {
-  chrome.runtime.sendMessage({
-    type: "pageProtection",
-    state: {
-      ready: true,
-      dirty,
-      upload,
-      media,
-      url: location.href
-    }
-  }).catch(() => {});
+  try {
+    if (!chrome.runtime?.id) return;
+    chrome.runtime.sendMessage({
+      type: "pageProtection",
+      state: {
+        ready: true,
+        dirty,
+        upload,
+        media,
+        url: location.href
+      }
+    })?.catch?.(() => {});
+  } catch {
+    // An older content script can remain in a page after its extension reloads.
+  }
 }
 
 function markDirty(event) {
