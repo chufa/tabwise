@@ -16,3 +16,14 @@ test("page protection reporter ignores invalidated extension contexts", () => {
   assert.doesNotThrow(() => vm.runInNewContext(script, context));
   assert.equal(listeners.size, 5);
 });
+
+test("page protection uses callback messaging so invalidated requests cannot reject later", () => {
+  let callbacks = 0;
+  const context = {
+    chrome: { runtime: { id: "tabwise", lastError: { message: "Extension context invalidated." },
+      sendMessage: (...args) => { const callback = args.at(-1); if (typeof callback === "function") { callbacks++; callback(); } } } },
+    document: { addEventListener() {} }, location: { href: "https://example.test/" }, Element: class {}
+  };
+  vm.runInNewContext(script, context);
+  assert.equal(callbacks, 1);
+});

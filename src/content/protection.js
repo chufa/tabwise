@@ -1,10 +1,15 @@
 let dirty = false;
 let upload = false;
 let media = false;
+let runtimeAvailable = true;
 
 function report() {
+  if (!runtimeAvailable) return;
   try {
-    if (!chrome.runtime?.id) return;
+    if (!chrome.runtime?.id) {
+      runtimeAvailable = false;
+      return;
+    }
     chrome.runtime.sendMessage({
       type: "pageProtection",
       state: {
@@ -14,9 +19,17 @@ function report() {
         media,
         url: location.href
       }
-    })?.catch?.(() => {});
+    }, () => {
+      try {
+        // Reading lastError acknowledges a failed callback delivery after an extension reload.
+        if (chrome.runtime.lastError) runtimeAvailable = false;
+      } catch {
+        runtimeAvailable = false;
+      }
+    });
   } catch {
     // An older content script can remain in a page after its extension reloads.
+    runtimeAvailable = false;
   }
 }
 
