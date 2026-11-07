@@ -22,6 +22,14 @@
 .saved-tools small, .saved-hint { color: var(--saved-muted); }
 .saved-tools input:not([type=checkbox]) { width: 100%; min-width: 0; margin-top: 5px; padding: 9px; border: 1px solid var(--saved-line); border-radius: 6px; background: var(--saved-surface); color: inherit; caret-color: var(--saved-action); }
 .saved-tools input::placeholder { color: var(--saved-muted); }
+.saved-tools textarea { box-sizing: border-box; width: 100%; resize: vertical; padding: 8px; color: inherit; background: var(--saved-surface); border: 1px solid var(--saved-line); border-radius: 6px; font: inherit; }
+.workspace-filters label { min-width: 0; flex: 1 1 120px; }
+.workspace-notes { white-space: pre-wrap; max-height: 5em; overflow: auto; margin-top: 6px; }
+mark { background: #ffe29a; color: #302609; border-radius: 2px; }
+.organization-result { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.workspace-favorites:empty { display: none; }
+.saved-member [data-page-tags] { flex: 1 1 140px; box-sizing: border-box; max-width: 100%; }
+.saved-tools textarea:focus-visible, .saved-tools select:focus-visible { outline: 2px solid var(--saved-action); outline-offset: 2px; }
 .saved-tools button { padding: 6px 8px; border: 1px solid var(--saved-line); border-radius: 6px; background: var(--saved-surface); color: var(--saved-action); font-size: 11px; font-weight: 700; }
 .saved-tools button:hover { background: var(--saved-panel); }
 .saved-tools button:disabled { opacity: .5; cursor: default; }
@@ -30,7 +38,7 @@
 .selection-count { color: var(--saved-muted); font-variant-numeric: tabular-nums; }
 .saved-members { min-width: 0; max-height: 260px; overflow: auto; padding: 0; margin: 10px 0; border: 0; scrollbar-color: var(--saved-muted) transparent; scrollbar-width: thin; }
 .saved-members legend { color: var(--saved-muted); padding: 0; }
-.saved-member { display: flex; gap: 8px; align-items: flex-start; padding: 9px 0; border-bottom: 1px solid var(--saved-line); }
+.saved-member { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; padding: 9px 0; border-bottom: 1px solid var(--saved-line); }
 .saved-member input { flex: 0 0 auto; margin: 4px 0; }
 .saved-member span { min-width: 0; }
 .saved-member strong, .saved-member small { display: block; overflow-wrap: anywhere; }

@@ -1,6 +1,7 @@
 import { getWorkspaces, queueStorage } from "../shared/storage.js";
 import { sourceState } from "../shared/restoration.js";
 import { compareSnapshots, snapshotSignature } from "../shared/session.js";
+import { inheritPageTags } from "../shared/workspace-presets.js";
 
 const content = (source) => ({ schemaVersion: source.schemaVersion || 1, windowCount: source.windowCount || 1, tabs: source.tabs, groups: source.groups || [] });
 export function createWorkspaceUpdates(snapshot, apply) {
@@ -37,6 +38,7 @@ export function createWorkspaceUpdates(snapshot, apply) {
       if (rollback && !version) throw new Error("历史版本已移除，请重新选择。");
       const live = rollback ? null : await snapshot({ windowId });
       const target = content(rollback ? version : live);
+      if (!rollback) target.tabs = inheritPageTags(target.tabs, workspace.tabs);
       if (!target.tabs.length) throw new Error("当前窗口没有可保存的网页。");
       const preview = { id: crypto.randomUUID(), owner: sender.documentId, workspaceId: workspace.id, windowId,
         signature: sourceState(workspace), liveSignature: live && snapshotSignature(live), target, versionId: message.versionId,

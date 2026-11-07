@@ -1,11 +1,18 @@
 import { sanitizeSavedSnapshot } from "./session.js";
+import { workspaceMetadata } from "./workspace-metadata.js";
+import { normalizePageTags } from "./workspace-presets.js";
 
-export function editWorkspace(workspace, name, indices) {
+export function editWorkspace(workspace, name, indices, metadata = {}) {
   const trimmed = String(name || "").trim();
   if (!trimmed || trimmed.length > 80) throw new Error("工作区名称需为 1–80 个字符。");
   if (!Array.isArray(indices) || !indices.length) throw new Error("请至少保留一个页面。");
   if (indices.some((index) => !Number.isInteger(index) || !workspace.tabs[index])) throw new Error("工作区成员已变化，请重新编辑。");
-  return { name: trimmed, tabs: [...new Set(indices)].map((index) => workspace.tabs[index]) };
+  return { name: trimmed, tabs: [...new Set(indices)].map((index) => {
+    const page = workspace.tabs[index];
+    const tags = normalizePageTags(metadata.pageTags?.[index] ?? page.tags ?? []);
+    return { ...page, ...(tags.length || page.tags ? { tags } : {}) };
+  }),
+    ...workspaceMetadata({ ...workspace, ...metadata }) };
 }
 
 export function mergeWorkspaces(workspaces, name) {

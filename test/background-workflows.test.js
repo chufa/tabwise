@@ -10,6 +10,7 @@ const area = (name) => ({
     return structuredClone(source);
   },
   async set(values) {
+    if (name === "local" && failFinalRecord && Object.values(values.suspensionRecords || {}).some((item) => item.reason === "direct" && item.state === "suspended")) throw new Error("post-effect quota");
     if (name === "local" && failBackupWrite && values.workspaces && values.settings) throw new Error("fixture quota failure");
     Object.assign(stores[name], structuredClone(values));
   },
@@ -29,6 +30,9 @@ let peakLoads = 0;
 let failCreateUrl;
 let onSample;
 let failBackupWrite = false;
+let failFinalRecord = false;
+let permissionGranted = true;
+let bytesUsed = 0;
 const alarms = new Map();
 globalThis.chrome = {
   storage: { local: area("local"), session: area("session") },
@@ -36,7 +40,7 @@ globalThis.chrome = {
   alarms: { onAlarm: event(), get: async (id) => alarms.get(id), clear: async (id) => alarms.delete(id), create: async (id, value) => alarms.set(id, value) },
   commands: { onCommand: event() },
   omnibox: { onInputChanged: event(), onInputEntered: event() },
-  permissions: { contains: async () => true },
+  permissions: { contains: async () => permissionGranted },
   windows: { getLastFocused: async () => ({ id: 1 }), update: async () => ({}) },
   tabs: {
     onActivated: event(), onDetached: event(), onRemoved: event(), onUpdated: event(),
@@ -61,6 +65,7 @@ globalThis.chrome = {
     }
   }
 };
+chrome.storage.local.getBytesInUse = async () => bytesUsed;
 await import("../src/background/service-worker.js");
 const sender = { id: "fixture", documentId: "document", tab: { windowId: 1 }, url: chrome.runtime.getURL("src/sidepanel/sidepanel.html") };
 function message(type, payload = {}, owner = sender) {
@@ -98,6 +103,25 @@ test("worker samples 25 tabs per round with concurrency four, retains other samp
   assert.equal(stores.session.resourceSnapshots[1], undefined);
   assert.equal(stores.session.resourceSnapshots[2], undefined);
   assert.equal(stores.session.resourceSnapshots[3], undefined);
+});
+
+test("backup management binds requested download to its exporting document and drill persists summaries only", async () => {
+  stores.local.workspaces = [{ id: "backup-status", name: "备份管理", notes: "私有备注", tags: ["AI"], tabs: [{ url: "https://backup.test/1" }] }];
+  stores.local.backupManagement = {};
+  const before = structuredClone(stores.local.workspaces);
+  const exported = await message("exportBackup");
+  assert.equal(stores.local.backupManagement.lastDownloadRequestedAt, undefined);
+  assert.equal((await message("backupDownloadRequested", { exportRequestId: exported.exportRequestId }, { ...sender, documentId: "other" })).ok, false);
+  assert.equal((await message("backupDownloadRequested", { exportRequestId: exported.exportRequestId })).ok, true);
+  assert.ok(stores.local.backupManagement.lastDownloadRequestedAt);
+  assert.equal((await message("backupDownloadRequested", { exportRequestId: exported.exportRequestId })).ok, false);
+  assert.equal((await message("drillBackup", { backup: exported })).ok, true);
+  assert.deepEqual(stores.local.workspaces, before);
+  assert.ok(!JSON.stringify(stores.local.backupManagement).includes("私有备注"));
+  const broken = structuredClone(exported);
+  broken.payload.workspaces[0].name = "corrupt";
+  assert.equal((await message("drillBackup", { backup: broken })).ok, false);
+  assert.equal(stores.local.backupManagement.history[0].ok, false);
 });
 test("sample collected during navigation is invalidated even when the URL returns to its original value", async () => {
   const tab = tabs.find((tab) => tab.id === 4);
@@ -183,6 +207,7 @@ test("worker restart records interrupted opening without replay and rejects retr
   const { sourceState } = await import("../src/shared/restoration.js");
   stores.session.restoreTasks = [{ id: "interrupted-task", kind: "workspace", sourceId: "interrupted",
     signature: sourceState(stores.local.workspaces[0]), status: "running", results: [{ index: 0, status: "opening" }], indices: [0], total: 1 }];
+  stores.local.restoreTaskLedger = structuredClone(stores.session.restoreTasks);
   const restarted = createRestorer(async () => {});
   const task = await restarted.detail("interrupted-task");
   assert.equal(task.status, "interrupted");
@@ -190,6 +215,66 @@ test("worker restart records interrupted opening without replay and rejects retr
   assert.equal(tabs.length, 0);
   stores.local.workspaces[0].tabs[0].url = "https://changed.test/";
   await assert.rejects(restarted.retry("interrupted-task"), /变化/);
+});
+
+test("on-demand restoration creates placeholders without loading sources and respects chosen concurrency", async () => {
+  tabs = [];
+  stores.session.restoreTasks = [];
+  stores.local.suspensionRecords = {};
+  stores.local.workspaces = [{ id: "lazy", name: "Lazy", tabs: Array.from({ length: 8 }, (_, i) => ({ title: `Lazy ${i}`, url: `https://lazy.test/${i}` })) }];
+  activeLoads = 0; peakLoads = 0;
+  const preview = await message("prepareRestore", { kind: "workspace", sourceId: "lazy" });
+  const started = await message("startRestore", { previewId: preview.previewId, indices: Array.from({ length: 8 }, (_, i) => i), loadMode: "on-demand", concurrency: 2 });
+  await settle(() => stores.session.restoreTasks.find((task) => task.id === started.taskId)?.status === "completed");
+  const detail = await message("getRestoreTask", { taskId: started.taskId, offset: 5 });
+  assert.equal(detail.itemTotal, 8);
+  assert.equal(detail.results.length, 3);
+  assert.ok(tabs.every((tab) => tab.url.includes("/suspended.html#")));
+  assert.equal(Object.values(stores.local.suspensionRecords).length, 8);
+  assert.ok(peakLoads <= 2);
+  const archived = await message("archiveTask", { taskId: started.taskId, taskType: "restore" });
+  assert.equal(archived.ok, true);
+  assert.equal((await message("getTasks")).some((task) => task.id === started.taskId), false);
+});
+
+test("temporary page protection blocks previewed and direct suspensions until explicitly removed", async () => {
+  tabs = [{ id: 1, url: "https://protected.test/article", title: "Protected", status: "complete", windowId: 1 }];
+  stores.local.settings = { autoSuspend: false, resourceSampling: false, trustedDomains: ["protected.test"] };
+  stores.local.suspensionRecords = {};
+  const preview = await message("prepareBatch", { kind: "suspend" });
+  assert.equal((await message("protectTab", { tabId: 1, duration: "session" })).ok, true);
+  assert.equal((await message("directSuspendTab", { tabId: 1 })).ok, false);
+  const task = await message("startBatchPreview", { previewId: preview.previewId, tabIds: [1] });
+  await settle(() => stores.session.batchTasks.find((item) => item.id === task.taskId)?.status === "completed");
+  assert.equal((await message("getTask", { taskId: task.taskId })).skipped, 1);
+  assert.equal((await message("unprotectTab", { tabId: 1 })).ok, true);
+  assert.equal((await message("suspendTab", { tabId: 1 })).ok, true);
+});
+
+test("extension dashboard restores the recorded tab instead of its own caller tab", async () => {
+  stores.local.suspensionRecords = {};
+  stores.local.suspensionRestoreRecords = {};
+  tabs = [{ id: 700, windowId: 1, url: chrome.runtime.getURL("src/suspended/suspended.html") + "#restore-ui", status: "complete" }];
+  stores.local.suspensionRecords["restore-ui"] = { recordId: "restore-ui", tabId: 700, originalUrl: "https://restore-ui.test/", state: "suspended" };
+  const result = await message("restoreRecord", { recordId: "restore-ui" }, { ...sender, tab: { id: 800, windowId: 1 } });
+  assert.equal(result.ok, true);
+  assert.equal(tabs[0].url, "https://restore-ui.test/");
+});
+
+test("partially restoring an archived workspace permits retry after automatic unarchiving", async () => {
+  tabs = [];
+  stores.local.workspaces = [{ id: "archive-retry", name: "归档重试", archived: true,
+    tabs: [{ url: "https://archive-retry.test/1" }, { url: "https://archive-retry.test/2" }] }];
+  failCreateUrl = "https://archive-retry.test/2";
+  const preview = await message("prepareRestore", { kind: "workspace", sourceId: "archive-retry" });
+  const started = await message("startRestore", { previewId: preview.previewId, indices: [0, 1], concurrency: 1 });
+  await settle(() => stores.session.restoreTasks?.find((task) => task.id === started.taskId)?.status === "completed");
+  assert.equal(stores.local.workspaces[0].archived, false);
+  failCreateUrl = undefined;
+  const retried = await message("retryTask", { taskType: "restore", taskId: started.taskId });
+  assert.equal(retried.ok, true);
+  await settle(() => stores.session.restoreTasks?.find((task) => task.id === retried.taskId)?.status === "completed");
+  assert.equal(tabs.length, 2);
 });
 
 test("backup preview does not mutate storage, checks ownership and imports settings/workspaces atomically", async () => {
@@ -256,7 +341,7 @@ test("unified batch task stops later suspensions, skips changed retry targets an
     await settle(() => startedCount === 5);
     const listed = await message("getTasks");
     assert.equal(listed.find((item) => item.id === task.taskId).kind, "suspend");
-    await message("stopTask", { taskId: task.taskId });
+    await message("stopTask", { taskId: task.taskId, taskType: "batch" });
     release();
     await settle(() => stores.session.batchTasks.find((item) => item.id === task.taskId).status === "stopped");
     const stopped = await message("getTask", { taskId: task.taskId });
@@ -264,7 +349,7 @@ test("unified batch task stops later suspensions, skips changed retry targets an
     await settle(() => Boolean(stores.session.batchTasks.find((item) => item.id === task.taskId).operationId));
     assert.equal((await message("getOperations")).filter((item) => item.label.includes("批量休眠")).length, 1);
     tabs[5].url = "https://changed.test/";
-    const retry = await message("retryTask", { taskId: task.taskId });
+    const retry = await message("retryTask", { taskId: task.taskId, taskType: "batch" });
     await settle(() => stores.session.batchTasks.find((item) => item.id === retry.taskId).status === "completed");
     const result = await message("getTask", { taskId: retry.taskId });
     assert.equal(result.count, 6);
@@ -313,14 +398,14 @@ test("group tasks finish one window before stopping, persist undo evidence and r
     const started = await message("startBatchGroup", { tabIds: tabs.map((tab) => tab.id), title: "Groups" });
     await settle(() => calls === 1);
     assert.equal(stores.session.batchTasks[0].results[0].undoItems[0].before.tabs.length, 3);
-    await message("stopTask", { taskId: started.taskId });
+    await message("stopTask", { taskId: started.taskId, taskType: "batch" });
     release();
     await settle(() => Boolean(stores.session.batchTasks.find((task) => task.id === started.taskId).operationId));
     const result = await message("getTask", { taskId: started.taskId });
     assert.equal(result.status, "stopped");
     assert.equal(result.count, 3);
     assert.equal(calls, 1);
-    const retry = await message("retryTask", { taskId: started.taskId });
+    const retry = await message("retryTask", { taskId: started.taskId, taskType: "batch" });
     await settle(() => Boolean(stores.session.batchTasks.find((task) => task.id === retry.taskId).operationId));
     assert.equal((await message("getTask", { taskId: retry.taskId })).count, 3);
     assert.equal(calls, 2);
@@ -384,4 +469,48 @@ test("real worker search route applies flat sidebar filters and deduplicates onl
   const live = await message("searchPages", { query: "unique filter needle", source: "open", windowId: 2, status: "protected", deduplicate: true });
   assert.equal(live.length, 1);
   assert.equal(live[0].tabId, 2);
+});
+test("post-effect storage failure keeps a restorable URL and quota pressure prevents new suspensions", async () => {
+  tabs = [{ id: 801, windowId: 1, url: "https://fault.test/a", title: "Fault", status: "complete", active: false }];
+  stores.local.settings = { autoSuspend: false, resourceSampling: false };
+  failFinalRecord = true;
+  const result = await message("directSuspendTab", { tabId: 801 });
+  failFinalRecord = false;
+  assert.equal(result.ok, true);
+  assert.equal(result.recoveryRetained, true);
+  assert.equal(stores.local.suspensionRestoreRecords[result.recordId].originalUrl, "https://fault.test/a");
+  assert.equal((await message("restoreRecord", { recordId: result.recordId })).ok, true);
+  tabs = [{ id: 802, windowId: 1, url: "https://fault.test/b", status: "complete", active: false }];
+  bytesUsed = 10 * 1024 * 1024 - 1000;
+  const rejected = await message("directSuspendTab", { tabId: 802 });
+  bytesUsed = 0;
+  assert.equal(rejected.ok, false);
+  assert.equal(tabs[0].url, "https://fault.test/b");
+});
+test("permission revocation and disabled sampling prevent script injection", async () => {
+  tabs = [{ id: 803, windowId: 1, url: "https://permission.test/a", status: "complete" }];
+  stores.local.settings = { autoSuspend: false, resourceSampling: true, resourceSamplingMode: "off" };
+  const before = measured.length;
+  await message("getDashboard");
+  assert.equal(measured.length, before);
+  permissionGranted = false;
+  const result = await message("getResourceDiagnostics");
+  permissionGranted = true;
+  assert.equal(result.ok, false);
+  assert.ok(result.permissionRequest);
+  assert.equal(measured.length, before);
+});
+test("concurrent restore retry and resume create only one successor and do not reopen settled pages", async () => {
+  tabs = [];
+  stores.local.workspaces = [{ id: "concurrent", name: "Concurrent", tabs: [{ url: "https://concurrent.test/a" }] }];
+  const { sourceState } = await import("../src/shared/restoration.js");
+  stores.session.restoreTasks = [{ id: "concurrent-parent", kind: "workspace", sourceId: "concurrent", status: "stopped",
+    signature: sourceState(stores.local.workspaces[0]), results: [{ index: 0, status: "pending" }], indices: [0], total: 1 }];
+  const results = await Promise.all([message("retryRestoreTask", { taskId: "concurrent-parent" }),
+    message("resumeRestoreTask", { taskId: "concurrent-parent", taskType: "restore" }), message("retryRestoreTask", { taskId: "concurrent-parent" })]);
+  assert.equal(results.filter((item) => item.ok).length, 1);
+  const child = results.find((item) => item.ok);
+  await settle(() => stores.session.restoreTasks.find((item) => item.id === child.taskId)?.status === "completed");
+  assert.equal(tabs.length, 1);
+  assert.equal((await message("getRestoreTask", { taskId: "concurrent-parent" })).retryable, false);
 });

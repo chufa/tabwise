@@ -1,11 +1,13 @@
 import { sameOperationState } from "./operations.js";
+import { normalizePageTags } from "./workspace-presets.js";
 
 export function sanitizeSavedSnapshot(source) {
   const input = Array.isArray(source?.tabs) ? source.tabs : [];
   if (input.length > 5000) throw new Error("单个快照超过 5000 页上限，请拆分后导入。");
   const pages = input.filter((page) => page && !page.incognito && /^https?:\/\//.test(page.url || ""));
   const title = (value) => String(value || "").slice(0, 300);
-  if (source?.schemaVersion !== 2) return { tabs: pages.map((page) => ({ title: title(page.title), url: page.url })) };
+  if (source?.schemaVersion !== 2) return { tabs: pages.map((page) => ({ title: title(page.title), url: page.url,
+    ...(page.tags ? { tags: normalizePageTags(page.tags) } : {}) })) };
   const ordinal = (value) => Number.isInteger(value) && value >= 0 && value < 10_000 ? value : 0;
   const colors = new Set(["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"]);
   if (Array.isArray(source.groups) && source.groups.length > 5000) throw new Error("快照标签组超过 5000 个上限。");
@@ -15,7 +17,8 @@ export function sanitizeSavedSnapshot(source) {
   return buildSessionSnapshot(pages.map((page, id) => ({
     id, url: page.url, title: title(page.title), windowId: ordinal(page.windowKey), index: ordinal(page.index),
     pinned: Boolean(page.pinned), active: Boolean(page.active), discarded: page.status === "suspended",
-    groupId: groupMap.get(`${ordinal(page.windowKey)}:${page.groupKey}`) ?? -1
+    groupId: groupMap.get(`${ordinal(page.windowKey)}:${page.groupKey}`) ?? -1,
+    ...(page.tags ? { tags: normalizePageTags(page.tags) } : {})
   })), [], groups);
 }
 
@@ -42,7 +45,8 @@ export function buildSessionSnapshot(tabs, records = [], groups = [], extensionO
       windowKey, index: windowCounts.get(windowKey) || 0,
       pinned: Boolean(tab.pinned), active: Boolean(tab.active),
       groupKey: group ? groupKeys.get(group.id) : "",
-      status: placeholder || tab.discarded ? "suspended" : "open"
+      status: placeholder || tab.discarded ? "suspended" : "open",
+      ...(tab.tags ? { tags: normalizePageTags(tab.tags) } : {})
     });
     windowCounts.set(windowKey, (windowCounts.get(windowKey) || 0) + 1);
   }
@@ -60,7 +64,8 @@ export function snapshotSignature(snapshot) {
     tabs: (snapshot.tabs || []).map((page) => ({
       url: page.url, title: page.title || "", windowKey: page.windowKey ?? 0,
       index: page.index ?? 0, pinned: Boolean(page.pinned), active: Boolean(page.active),
-      groupKey: page.groupKey || "", status: page.status || "open"
+      groupKey: page.groupKey || "", status: page.status || "open",
+      ...(page.tags?.length ? { tags: normalizePageTags(page.tags) } : {})
     })),
     groups: (snapshot.groups || []).map(({ key, windowKey, title, color, collapsed }) => [key, windowKey, title, color, collapsed])
   });

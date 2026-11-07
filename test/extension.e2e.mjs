@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { chromium } from "playwright";
@@ -8,8 +8,29 @@ import { sourceState } from "../src/shared/restoration.js";
 import { verifySession } from "./session.e2e.mjs";
 import { verifyExpansion } from "./expansion.e2e.mjs";
 import { verifyEnhancements } from "./enhancements.e2e.mjs";
+import { verifyPriorities, prepareRestart, verifyRestart } from "./priorities.e2e.mjs";
+import { verifyReliability } from "./reliability.e2e.mjs";
 
 const extensionPath = path.resolve(".");
+const failureDirectory = await mkdtemp(path.join(os.tmpdir(), "tabwise-failure-"));
+async function bounded(work, timeout = 1500) {
+  let timer;
+  try {
+    return await Promise.race([work(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("evidence timeout")), timeout); })]);
+  } finally { clearTimeout(timer); }
+}
+async function failureEvidence(page, error) {
+  const state = await bounded(() => page.evaluate(async () => ({
+    url: location.href, title: document.title,
+    tasks: await chrome.runtime.sendMessage({ type: "getTasks" }),
+    health: await chrome.runtime.sendMessage({ type: "getHealth" }),
+    diagnostics: await chrome.runtime.sendMessage({ type: "getDiagnostics" })
+  }))).catch((e) => ({ error: e.message }));
+  await bounded(() => page.screenshot({ path: path.join(failureDirectory, "failure.png"), timeout: 1500 })).catch(() => {});
+  await writeFile(path.join(failureDirectory, "state.json"), JSON.stringify({ error: error.message, state }, null, 2));
+  console.error(`Failure evidence: ${failureDirectory}`);
+  return state;
+}
 
 function startTestServer() {
   const hits = new Map();
@@ -95,11 +116,17 @@ async function message(extensionPage, type, payload = {}) {
 
 async function waitForBrowserState(page, predicate, argument) {
   const deadline = Date.now() + 10_000;
+  let predicateError = "";
   while (Date.now() < deadline) {
-    if (await page.evaluate(predicate, argument)) return;
+    try {
+      if (await bounded(() => page.evaluate(predicate, argument), Math.min(1500, Math.max(1, deadline - Date.now())))) return;
+    } catch (error) {
+      predicateError = error.message;
+    }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  throw new Error("Browser state did not settle before timeout");
+  const state = await failureEvidence(page, new Error(predicateError || "state timeout"));
+  throw new Error(`Browser state did not settle before timeout. Last predicate error: ${predicateError || "none"}. State: ${JSON.stringify(state)}`);
 }
 
 async function waitForWorker(context) {
@@ -114,7 +141,7 @@ async function waitForWorker(context) {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     for (const worker of context.serviceWorkers()) {
-      if (await isTabWise(worker)) return worker;
+      if (await bounded(() => isTabWise(worker))) return worker;
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
@@ -643,7 +670,7 @@ try {
   await control.getByRole("button", { name: "关闭预览" }).click();
   await preciseRow.getByRole("button", { name: "编辑", exact: true }).click();
   await control.locator(".workspace-editor input[name=workspace-name]").fill("UI编辑工作区");
-  await control.locator(".workspace-editor .saved-member input").nth(1).uncheck();
+  await control.locator('.workspace-editor .saved-member input[type="checkbox"]').nth(1).uncheck();
   await control.getByRole("button", { name: "保存修改", exact: true }).click();
   await control.locator(".workspace-editor").waitFor({ state: "hidden" });
   const edited = (await message(control, "getWorkspaces")).find((item) => item.id === preciseWorkspace.id);
@@ -707,6 +734,8 @@ try {
   await verifySession({ context, control, fixture, extensionUrl, message, waitForBrowserState, waitForWorker });
   await verifyExpansion({ context, control, fixture, extensionUrl, message, waitForBrowserState, waitForWorker });
   await verifyEnhancements({ context, control, fixture, extensionUrl, message, waitForBrowserState, waitForWorker });
+  await verifyPriorities({ context, control, fixture, extensionUrl, message, waitForBrowserState });
+  await verifyReliability({ context, control, fixture, extensionUrl, message, waitForBrowserState, waitForWorker });
   if (process.env.TABWISE_E2E_ARTIFACT_DIR) {
     await control.reload();
     await control.locator(".operation-item").first().waitFor();
@@ -737,7 +766,21 @@ try {
       assert.ok(await popupVisual.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     }
   }
-  console.log("E2E PASS: precise search, selective restore, workspace edit/merge/trash/undo, minute alarms/catch-up/failure/retry/restart; AI cancellation/cache and existing tab workflows");
+  const restart = await prepareRestart({ control, fixture, message });
+  await context.close();
+  context = await chromium.launchPersistentContext(profile, {
+    channel: "chromium", headless: true,
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]
+  });
+  await waitForWorker(context);
+  const resumed = await context.newPage();
+  await resumed.goto(`${extensionUrl}/src/sidepanel/sidepanel.html`);
+  await verifyRestart({ control: resumed, fixture, message, waitForBrowserState, restart });
+  console.log("E2E PASS: existing workflows; workspace metadata/filters, backup drill/reminder, on-demand no-request restore, protection, effects, browser restart with durable tasks");
+} catch (error) {
+  const page = context?.pages().find((item) => item.url().includes("/src/sidepanel/"));
+  if (page) await failureEvidence(page, error);
+  throw error;
 } finally {
   await context?.close();
   await fixture.close();

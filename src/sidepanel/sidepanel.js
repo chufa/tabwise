@@ -1,4 +1,4 @@
-import { escapeHtml } from "../shared/html.js";
+import { escapeHtml, highlightMatch } from "../shared/html.js";
 import { createRestoreUI, createWorkspaceUI } from "../shared/workspace-ui.js";
 import { createRefresh, connectLiveUI, updateHTML } from "../shared/live-ui.js";
 import { createSessionUI } from "../shared/session-ui.js";
@@ -82,6 +82,10 @@ function setFeedback(message = "", isError = false) {
   feedback.classList.toggle("is-error", isError);
 }
 function renderLifecycle(items = []) {
+  const effects = dashboard.effects || {};
+  $("#effects").textContent = `最近 30 天（最多 200 次）：成功休眠 ${effects.suspensions || 0} 次，恢复 ${effects.restores || 0} 次。${effects.sampledSuspensions ? `休眠前 JS 堆采样合计 ${formatMemory(effects.sampledHeapBeforeSuspendBytes)}，覆盖 ${effects.sampledSuspensions} 次；这不是实际释放的物理内存。` : "暂无休眠前 JS 堆采样。"}${effects.timedRestores ? `从恢复请求到网页加载完成平均 ${effects.meanRestoreMs} ms（${effects.timedRestores} 次）。` : ""}`;
+  $("#backup-reminder").hidden = !dashboard.backup?.due;
+  $("#backup-reminder").textContent = "备份提醒：已到备份时间，可在设置中导出并进行恢复演练。";
   const labels = { active: "活动中", open: "已打开", idle: "已闲置", suggested: "建议休眠", suspended: "休眠中", archived: "已归档" };
   const order = ["active", "open", "idle", "suggested", "suspended", "archived"];
   const counts = Object.fromEntries(order.map((state) => [state, items.filter((item) => item.state === state)]));
@@ -89,12 +93,12 @@ function renderLifecycle(items = []) {
     <span>${labels[state]}</span><strong>${counts[state].length}</strong></div>`).join("") || "暂无可展示的页面状态。");
 }
 function renderHealth(health) {
-  const storage = health?.storage || {}, restore = health?.restore || {}, sync = health?.sync || {};
+  const storage = health?.storage || {}, tasks = health?.tasks || health?.restore || {}, sync = health?.sync || {};
   const size = Number.isFinite(storage.bytesInUse) ? `${Math.round(storage.bytesInUse / 1024 / 1024 * 10) / 10} / ${Math.round(storage.quotaBytes / 1024 / 1024)} MB` : "不可用";
   const status = storage.level === "critical" ? "接近上限" : storage.level === "warning" ? "需要关注" : "正常";
   updateHTML($("#health"), `<div><span>本地存储</span><strong>${escapeHtml(size)}</strong><small>${status}</small></div>
     <div><span>同步版本</span><strong>v${sync.revision || 0}</strong><small>${sync.updatedAt ? relativeTime(sync.updatedAt) : "尚未同步"}</small></div>
-    <div><span>恢复任务</span><strong>${restore.pending || 0}</strong><small>${restore.pending ? "可从任务中心继续" : "无待处理任务"}</small></div>`);
+    <div><span>待处理任务</span><strong>${tasks.pending || 0}</strong><small>${tasks.pending ? "可从任务中心继续" : "无待处理任务"}</small></div>`);
 }
 
 function pageRow(page) {
@@ -108,8 +112,8 @@ function pageRow(page) {
   }[page.status] || page.source;
   return `<article class="result">
     <div class="result-copy">
-      <strong title="${escapeHtml(page.title)}">${escapeHtml(page.title)}</strong>
-      <span title="${escapeHtml(page.url)}">${escapeHtml(page.domain || page.url)}</span>
+      <strong title="${escapeHtml(page.title)}">${highlightMatch(page.title, $("#page-search").value)}</strong>
+      <span title="${escapeHtml(page.url)}">${highlightMatch(page.url, $("#page-search").value)}</span>
       <span>${escapeHtml(sources.join(" · "))}</span>
     </div>
     <span class="badge">${escapeHtml(state)}</span>
@@ -128,6 +132,8 @@ function candidateRow(candidate) {
     <div class="candidate-actions">
       <button class="quiet-button" data-action="focus-candidate" data-tab-id="${tab.id}" type="button">详情</button>
       <button class="action-button" data-action="suspend" data-tab-id="${tab.id}" type="button">休眠</button>
+      <button class="quiet-button" data-action="protect-hour" data-tab-id="${tab.id}" type="button">保护 1 小时</button>
+      <button class="quiet-button" data-action="protect-session" data-tab-id="${tab.id}" type="button">会话保护</button>
     </div>
   </article>`;
 }
@@ -293,6 +299,7 @@ document.body.addEventListener("click", async (event) => {
     if (button.dataset.action === "open-result") result = await chrome.runtime.sendMessage({ type: "openSearchResult", result: JSON.parse(button.dataset.result) });
     if (button.dataset.action === "focus-candidate") result = await chrome.runtime.sendMessage({ type: "focusTab", tabId: Number(button.dataset.tabId) });
     if (button.dataset.action === "suspend") result = await chrome.runtime.sendMessage({ type: "directSuspendTab", tabId: Number(button.dataset.tabId) });
+    if (["protect-hour", "protect-session"].includes(button.dataset.action)) result = await chrome.runtime.sendMessage({ type: "protectTab", tabId: Number(button.dataset.tabId), duration: button.dataset.action === "protect-hour" ? "hour" : "session" });
     if (button.dataset.action === "restore-recent") result = await chrome.runtime.sendMessage({ type: "restoreRecentSuspension", recordId: button.dataset.id });
     if (button.dataset.action === "restore-checkpoint") {
       await restoreUI.open("checkpoint", button.dataset.id);

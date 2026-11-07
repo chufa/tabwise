@@ -5,6 +5,7 @@ TabWise 是一个本地优先的 Chrome/Edge 标签管理扩展。它会将符�
 ## What the MVP includes
 
 - 可配置闲置时长，默认 30 分钟
+- 站点独立闲置阈值、标签临时保护 1 小时或当前浏览器会话
 - 两种自动策略：默认保守模式和可选智能保护模式
 - 批量休眠、暂停 1 小时、搜索与状态筛选
 - 最近休眠记录与单条撤销
@@ -20,7 +21,14 @@ TabWise 是一个本地优先的 Chrome/Edge 标签管理扩展。它会将符�
 - 本地中文分词、拼音/首字母、英文拼写纠错，以及来源/窗口/状态/工作区筛选
 - 最近关闭找回、快照增删与布局对比，勾选恢复缺失页
 - 工作区重命名、成员编辑、保留来源的去重合并和可撤销回收站
+- 工作区标签、仅本机备注、收藏排序与保存筛选
+- 记忆工作区恢复方式、批次大小、布局和去重选项；按页面标签选择恢复
+- 重复标签合并预览、主动选择链接检测、搜索关键词高亮与收藏快捷入口
+- 关闭、低频或普通后台采样，按页面数量与界面活动调整频率
 - 恢复任务中心：逐页进度、停止后续批次、失败与中断任务安全重试
+- 按需恢复：先建立本地休眠页，点击后才请求原站；每批页数可选 1–5
+- 备份下载时间、可关闭的提醒与独立恢复演练记录
+- 本地休眠次数、加载完成延迟和休眠前 JS 堆采样统计
 - 当前窗口关联工作区、更新差异预览、最近 5 个旧版本回退
 - 可选网页数量与 JS 堆预算、持续增长提示及确认后的安全回收
 - 大量标签分页、活动变化复用搜索索引、高频元数据合并写入
@@ -72,11 +80,25 @@ OLLAMA_ORIGINS='chrome-extension://<TabWise 扩展 ID>' ollama serve
 
 工作区可重命名、取消成员、固定或归档；勾选多个工作区后可合并，原工作区保留。布局快照合并保留窗口边界、重复页面、组信息和来源历史；旧版纯网址列表合并仍会去重。搜索打开成员和确认恢复都会更新最近打开时间。移入回收站仅改变本地快照，不关闭标签，也不参与搜索、AI 分析或自动归档。回收站最多 20 个，满额时拒绝继续移入；可恢复或在明确确认后永久删除。恢复及撤销也遵守 20 个有效工作区上限。备份导出只包括回收站之外的工作区，导入容量不足时拒绝整批导入，不覆盖现有工作区。
 
+编辑工作区时可添加最多 12 个标签（每个 30 字）、2000 字备注和收藏状态；收藏优先排序。列表可按名称、页面、标签和备注搜索，按标签、收藏或归档状态筛选，最多保存 10 个筛选条件。备注与筛选仅保存在本机，随本地备份导出；主动同步会同步工作区网址、标签、名称及收藏/固定/归档状态，备注不进入同步，采用远端版本也保留原有本机备注。名称、标签和收藏变化参与同步冲突比较；这些字段及备注修改会使内容预览失效，最近打开时间和恢复时自动取消归档不使内容预览失效。
+
+每个保存页面可单独设置标签，恢复预览按页面标签勾选，也可继续手动调整。默认记住工作区的加载方式、1–5 页批次大小、布局、跳过已有页面和标签选择；只记忆选项，不自动恢复。预设及页面标签随备份和主动同步保留。列表提供收藏快捷按钮，命令面板优先展示收藏。搜索页面、工作区及分页列表对直接命中的关键词做安全高亮。
+
+「合并当前窗口重复页」预览同一窗口中完整网址完全一致且通过当前保护策略的重复页面，每组保留一页；活动、固定、播放音频、临时保护或保护状态未知的页面不会列为可关闭项。可取消勾选，确认后重新检查保留页与待关闭页的网址、导航版本、活动和保护状态，变化项跳过。关闭预览只执行一次，不跨窗口关闭页面。
+
+工作区「检测链接」先列出保存的页面，默认不选；明确选择 1–50 页后点击检测，才向这些网站发送最多并发 3 个、每项最多 5 秒的 HEAD 请求。请求不携带登录凭据，不打开页面、不读取正文、不自动删除保存内容。404/410 标为失效；401/403 或登录跳转显示需登录；离线、超时、服务错误及不支持 HEAD 均不判定失效。保存内容变化后须重新预览。
+
+主动同步先预览并选择云端副本中的工作区，未选内容保留在本机；当前快照、页面标签、恢复预设与四类站点列表参与同步，本机备注、历史版本和合并来源不上传。每个分块约 6 KB，一次内容上限 45 KB，为旧版本与新版本同时保留空间。先写完整分块及 SHA-256 校验，再切换版本清单；容量不足、分块未到齐或预览后内容变化时拒绝覆盖。同步成功后工作区、设置及历史一次性写入本机；本机最终写入失败保留准备记录，重新预览确认后可以完成该版本，不自动重复创建冲突副本。兼容原单项元数据格式。浏览器云同步仍有传播延迟，远端分块未完整到达时应稍后重试；版本检查不提供跨设备的全局锁。
+
 ## 备份完整性
 
 新版 JSON 备份使用规范化 SHA-256 校验及页数、窗口、组和历史版本计数，保存工作区布局、休眠状态和最近 5 个版本。导入先预览，不修改存储；相同内容默认跳过，也可保留副本。ID 冲突生成新副本并记录来源，设置需单独勾选才导入。确认时重新检查当前工作区与容量，工作区和设置一次性写入；存储失败保留原数据并允许重试。
 
 旧版无校验备份仍可导入，会显示提示和无效页面计数。上限为 8 MiB、单个快照 5000 页、工作区及历史合计 50000 页、20 个有效工作区；超限明确拒绝，不截断页面。SHA-256 用于检测内容变化，不提供签名或加密。
+
+可选 AES-GCM 加密使用 PBKDF2-SHA256，默认 310000 轮；旧加密备份仍可读取，并提示重新加密。密码仅用于当前操作，不保存。生成备份 JSON 不记录已下载，设置页发起下载后才记录时间；浏览器下载请求不能证明文件已成功写到磁盘，请自行核对。提醒默认关闭，可选 7/30/90 天，在设置和侧栏显示，不发送通知或自动导出。
+
+「恢复演练」读取并解密所选文件，校验结构、完整性和数量，仅写入演练结果摘要；不导入工作区或设置、不打开网页。最近 20 条下载/演练记录仅保留时间、成功与校验状态、数量及是否加密，不保存文件内容、文件名或密码。普通导入预览仍不写入数据。
 
 ## 统一批量任务与命令面板
 
@@ -92,9 +114,13 @@ Popup 和侧栏点击「命令」或按 `⌘K` / `Ctrl+K` 打开命令面板。�
 
 ## 恢复任务中心
 
-Popup 和侧栏显示当前浏览器会话最近 10 个恢复任务，最多同时排队 5 项。确认恢复后立即返回任务编号，关闭界面后继续执行；任务及打开意图先写入会话存储，再创建窗口和标签。每批最多 5 页，停止会等待当前批次结束，后续页面保持未完成状态。详情每页显示 50 条结果。
+Popup 和侧栏分别保留最多 10 个恢复任务和 10 个批量任务，进行中记录优先保留，恢复最多同时排队 5 项。确认恢复后立即返回任务编号，关闭界面后继续执行；任务及打开意图先写入本地账本，再镜像到会话存储，随后创建窗口和标签。每批可选 1–5 页，停止会等待当前批次结束，后续页面保持未完成状态。详情每页显示 50 条结果。已结束任务可归档隐藏，并通过「显示已归档」查看；归档任务占用保留容量。
 
-后台 worker 重启会把未完成任务标记为中断，不自动重放。打开结果不确定的页面标为“需要重新检查”；手动重试只选择失败、已关闭或未完成页面，再检查保存来源和所有窗口的逻辑网址，默认跳过已存在页面。重试会生成关联原任务的新记录。浏览器退出后任务记录清空，保存的工作区和恢复点仍保留。
+后台 worker 或浏览器重启会把未完成任务标记为中断，不自动重放。打开结果不确定的页面标为“需要重新检查”；手动重试只选择失败、已关闭或未完成页面，再检查保存来源和所有窗口的逻辑网址，默认跳过已存在页面。重试会生成关联原任务的新记录，原记录不再重复计入健康状态。浏览器退出后本地账本保留，但重新启动会清除旧标签/窗口绑定；批量操作只保留摘要，必须重新预览当前页面，恢复任务可以重新校验保存来源后继续。
+
+恢复预览可选择「先建立休眠页，点击再加载」。此方式适用于布局快照及旧网址列表，先创建空白标签、持久化原网址记录，再导航到本地休眠页；不会请求原站。停止和重试保留加载模式与批次大小，不计作成功休眠网页的效果数据。
+
+重试与继续执行把父任务的后续任务编号和新任务一起写入账本，同一父任务只允许一个后续任务。多界面同时确认时只接受一个；旧任务显示后续任务入口，不再提供重试按钮。新任务仍可在失败后创建自己的后续任务，后台重启不自动重放任何已预约的副作用。
 
 ## 工作区增量更新
 
@@ -110,6 +136,10 @@ Popup 和侧栏显示当前浏览器会话最近 10 个恢复任务，最多同�
 
 超出预算后可预览安全回收候选，勾选后确认休眠，每次最多 50 页。候选必须通过当前保护策略和网页保护检查，并达到闲置阈值；活动、固定、播放音频、未保存编辑、上传、加载中和保护状态未知的页面均排除。执行前和休眠前再次检查网址、文档版本、设置、活动及保护状态，变化项会跳过。使用智能保护模式可获得网页保护状态。预算功能本身不自动休眠或关闭页面。
 
+站点独立闲置阈值在设置中以「域名 分钟」填写，最多 100 项，范围 5–1440 分钟，最具体的子域名优先；仅本机与备份保留，不参与跨设备站点列表同步。自动休眠、候选及预算回收共用阈值。临时保护优先于直接/批量/自动休眠，可设为 1 小时或当前浏览器会话；导航到另一网址、关闭标签或浏览器退出后失效，也可手动解除。
+
+侧栏休眠效果显示最近 30 天、最多 200 次成功操作的本地记录：实际休眠次数、恢复次数、从恢复请求到浏览器报告加载完成的平均延迟。休眠前 JS 堆采样只采用同网址最近 5 分钟的值，显示覆盖次数与合计；它是历史采样证据，不是实际释放的物理内存或电量节省，同页多次休眠可被重复计入。按需创建休眠页不计作卸载网页。记录不含标题、网址或浏览器标签 ID；「清除本地历史」同时清除效果记录。
+
 ## 大量标签性能
 
 Popup 标签列表、恢复选择、工作区编辑与更新差异、快照差异、批量预览、AI 手动页面选择和资源诊断每页最多渲染 50 条。跨页和筛选后的勾选保存在独立状态中，提交完整选择；「选择全部页」和清空作用于全部列表。AI 手动选择最多 20 页，仅在选择该范围时挂载列表。实时刷新复用带身份的 DOM 节点，保留输入草稿、焦点、展开状态和滚动位置。整理建议最多展示 12 项，展开成员最多 50 页；侧栏搜索通过后台检索完整索引，再返回有限结果。
@@ -117,6 +147,8 @@ Popup 标签列表、恢复选择、工作区编辑与更新差异、快照差�
 快照构建和差异对比使用窗口、分组和重复网址映射，避免逐页扫描全部列表。只有标题、域名或网址变化才重新编译中文/拼音搜索数据，活动、状态、窗口等变化更新结果元数据；并发搜索共用正在进行的索引构建。标签元数据更新按 100 ms 合并最新值，关闭标签前立即写入待处理更新；未变化数据不重复写入。
 
 `node test/performance.mjs` 使用 300/1000 页确定性元数据测量快照、索引和查询耗时，不会打开真实网页。浏览器回归另验证 1000 条仪表盘数据下每页 DOM 的数量，以及真实页面的停止、重试、保护和版本回退流程。
+
+`node test/browser-performance.mjs` 用独立配置对比不启用扩展与启用 TabWise/侧栏的真实 Chromium，每种模式运行 3 次，每次加载 12 个本地合成网页，报告页面堆、进程数、启动与加载 CPU 时间以及界面请求延迟。RSS 不可获取时返回 `null`；即使可获取，进程 RSS 相加也可能重复计算共享内存。这是该场景的扩展成本测量，不代表实际网站的电量收益。E2E 覆盖完整浏览器关闭/重开；等待失败时在系统临时目录保存截图、任务、健康状态和脱敏诊断，每项采集有超时。
 
 ## 会话布局、最近关闭与对比
 
@@ -142,13 +174,17 @@ Use `tw <keywords>` in Chrome's address bar to search. The first result can be o
 
 ## Page memory diagnostics
 
-TabWise rotates across at most 25 eligible webpages per one-minute sampling round, with at most four script calls in flight. Automatic idle checks rotate across at most 50 tabs, so large windows do not permanently miss tabs beyond the first 50. Untouched samples remain available while closed, discarded and navigated tabs lose stale samples; navigation revisions reject measurements from a changed document even if it returns to the same URL. UI refreshes do not start repeated rounds within a minute. The dashboard displays measured/eligible coverage and the latest session-only value in each tab row; those values come from different sampling times. Resource Diagnostics and resource reviews can force a full refresh with the same concurrency limit. 为保持稳定版 Chrome 的安装兼容性，诊断使用网页 JavaScript 堆采样，不申请仅开发版可用的 `processes` 权限。
+设置可选关闭、低频或普通后台采样。普通模式每轮最多 25 页，超过 200 个合格页面时降为 15 页，并发最多 4；界面活动时最短 1 分钟，后台为 2–3 分钟。低频模式每轮 8–12 页、并发最多 2，间隔 3–5 分钟。最近活动且未重新采样的页面优先取最多 4 页，其余名额持续轮转，避免饿死旧页面。关闭后不做后台采样，手动资源诊断仍可请求测量。
+
+Automatic idle checks rotate across at most 50 tabs. Untouched samples remain available while closed, discarded and navigated tabs lose stale samples; navigation revisions reject measurements from a changed document even if it returns to the same URL. The dashboard displays measured/eligible coverage and the latest session-only value in each tab row; those values come from different sampling times. Explicit diagnostics may refresh all eligible pages with bounded concurrency. 为保持稳定版 Chrome 的安装兼容性，诊断使用网页 JavaScript 堆采样，不申请仅开发版可用的 `processes` 权限。
 
 ## Production safeguards
 
 TabWise upgrades local storage through an idempotent schema migration on installation and browser startup; existing settings, workspaces and restore records are preserved. The settings page can export a bounded, redacted local diagnostic summary and clear local history, resource samples and AI cache without deleting settings, workspaces or active suspension restore records. Diagnostic summaries exclude page titles, complete URLs, form data and cookies.
 
 Recovery previews show the selected page count, already-open pages that will be skipped by default, suspended pages that will remain suspended and the intended window count. The GitHub Actions workflow runs unit tests, syntax checks and isolated Chromium extension regression tests on pull requests and `main` pushes.
+
+休眠前持久化原网址和恢复模式。存储距容量上限不足约 128 KiB 时拒绝新休眠，页面保持原样。浏览器已切换到休眠页或已卸载原网页后，状态、统计或历史写入失败也保留最初的恢复记录；无法判定浏览器操作结果时同样保留记录供检查，不盲目重放。只有确认浏览器未执行操作时才清理预约记录。
 
 ## Suspension modes
 
@@ -181,9 +217,12 @@ Recovery previews show the selected page count, already-open pages that will be 
 npm test
 npm run test:e2e
 npm run check
+npm run test:edge
 ```
 
 `test:e2e` uses a temporary Playwright Chromium profile in headless mode. It does not open a browser window or use the user's Chrome profile. Before the first run, install the bundled test browser with `npx playwright install chromium`.
+
+`test:edge` 使用已安装的 Microsoft Edge 和临时配置验证 MV3 后台、Popup、设置、侧栏、休眠恢复及带标签的按需恢复，不使用用户浏览器配置。Chromium 故障回归包含后台真实强制终止、离线、重复页预览过期、并发重试/续跑及同步选择界面；权限撤销通过运行时拒绝模拟，存储配额通过故障注入验证。Edge 冒烟验证不等同于完整 Chromium 用例或真实内置 AI 模型测试。
 
 AI E2E 使用本地 HTTP 假模型和浏览器 API 假模型验证范围、预览、结构校验、编辑/确认、旧建议拒绝及不可用场景，同时验证真实分组撤销、状态冲突、HTTP 请求取消、缓存重绑定和模型自检失败路径；不代表真实模型的推理质量或特定 Chrome 设备上的内置模型可用性。校验模块覆盖率可用 `node --test --experimental-test-coverage test/ai-analysis.test.js test/ai-cache.test.js test/operations.test.js` 检查。
 

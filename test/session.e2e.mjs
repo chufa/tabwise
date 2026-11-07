@@ -187,11 +187,13 @@ export async function verifySession({ context, control, fixture, extensionUrl, m
   const popup = await context.newPage();
   await popup.goto(`${extensionUrl}/src/popup/popup.html`);
   await popup.locator("#open-count").getByText(/^\d+$/).waitFor();
-  const oldCount = Number(await popup.locator("#open-count").textContent());
+  // Other restored pages may finish while this popup is open. Verify the
+  // specific new tab instead of assuming unrelated counts stay constant.
+  await popup.locator("#tab-search").fill("popup-sync");
   const syncTab = await popup.evaluate((base) => chrome.tabs.create({ url: `${base}/popup-sync`, active: false }), fixture.baseUrl);
-  await popup.waitForFunction((count) => Number(document.querySelector("#open-count").textContent) === count + 1, oldCount);
+  await waitForBrowserState(popup, () => [...document.querySelectorAll("#tabs .row strong")].some((item) => item.textContent === "popup-sync"));
   await popup.evaluate((id) => chrome.tabs.remove(id), syncTab.id);
-  await popup.waitForFunction((count) => Number(document.querySelector("#open-count").textContent) === count, oldCount);
+  await waitForBrowserState(popup, () => !document.querySelector("#tabs .row"));
   const settingsPage = await context.newPage();
   await settingsPage.goto(`${extensionUrl}/src/options/options.html`);
   await settingsPage.waitForFunction(() => document.querySelector("#closed-history-days").value === "7");

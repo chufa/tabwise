@@ -19,3 +19,13 @@ test("migration is idempotent for the current schema", () => {
   const state = { storageSchemaVersion: STORAGE_SCHEMA_VERSION, settings: { idleMinutes: 30 }, workspaces: [] };
   assert.deepEqual(migrateLocalState(state), { state, changed: false });
 });
+
+test("migration bounds durable task and sync history state", () => {
+  const { state, changed } = migrateLocalState({
+    syncHistory: Array.from({ length: 30 }, (_, index) => ({ id: `${index}`, revision: index })),
+    restoreTaskLedger: Array.from({ length: 15 }, (_, index) => ({ id: `${index}`, status: "completed", results: [] }))
+  });
+  assert.equal(changed, true);
+  assert.equal(state.syncHistory.length, 20);
+  assert.equal(state.restoreTaskLedger.length, 10);
+});

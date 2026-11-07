@@ -1,8 +1,16 @@
 import { backupFingerprint, backupHash, createBackup, createEncryptedBackup, readBackup } from "../shared/backup.js";
 import { getAllWorkspaces, getSettings, getWorkspaces, queueStorage, validateWorkspaceCapacity } from "../shared/storage.js";
+import { appendBackupEvent, backupStatus } from "../shared/backup-status.js";
 
 export function createBackupManager(sanitizeSettings) {
   const previews = new Map();
+  const exports = new Map();
+  async function record(event) {
+    return queueStorage("local", async () => {
+      const { backupManagement = {} } = await chrome.storage.local.get("backupManagement");
+      await chrome.storage.local.set({ backupManagement: appendBackupEvent(backupManagement, event) });
+    });
+  }
   const contentState = (workspaces) => backupHash(workspaces);
   async function describe(decoded, existing) {
     const fingerprints = new Set(await Promise.all(existing.filter((item) => !item.deletedAt).map(backupFingerprint)));
@@ -40,10 +48,38 @@ export function createBackupManager(sanitizeSettings) {
     });
   }
   return {
-    async export(options = {}) {
-      return queueStorage("local", async () => options.password
+    async export(options = {}, sender = {}) {
+      const backup = await queueStorage("local", async () => options.password
         ? createEncryptedBackup({ settings: await getSettings(), workspaces: await getWorkspaces(), password: options.password })
         : createBackup({ settings: await getSettings(), workspaces: await getWorkspaces() }));
+      const exportRequestId = crypto.randomUUID();
+      for (const [id, item] of exports) if (item.expiresAt <= Date.now() || item.owner === sender.documentId) exports.delete(id);
+      if (exports.size >= 5) exports.delete(exports.keys().next().value);
+      exports.set(exportRequestId, { owner: sender.documentId, expiresAt: Date.now() + 300000,
+        counts: backup.integrity.counts, encrypted: Boolean(options.password) });
+      return { ...backup, exportRequestId };
+    },
+    async downloadRequested(id, sender) {
+      const item = exports.get(id);
+      if (!item || !sender.documentId || item.owner !== sender.documentId || item.expiresAt <= Date.now()) throw new Error("导出记录已过期，请重新导出。");
+      await record({ kind: "download-requested", ok: true, verified: true, counts: item.counts, encrypted: item.encrypted });
+      exports.delete(id);
+      return { ok: true };
+    },
+    async status() {
+      const [{ backupManagement = {} }, settings] = await Promise.all([chrome.storage.local.get("backupManagement"), getSettings()]);
+      return backupStatus(backupManagement, settings.backupReminderDays);
+    },
+    async drill(backup, password) {
+      try {
+        const decoded = await readBackup(backup, password);
+        const result = { kind: "drill", ok: true, verified: decoded.verified, encrypted: Boolean(decoded.encrypted), counts: decoded.counts };
+        await record(result);
+        return { ...result, warnings: decoded.warnings };
+      } catch (error) {
+        await record({ kind: "drill", ok: false });
+        throw error;
+      }
     },
     async prepare(backup, sender, password) {
       if (!sender.documentId) throw new Error("请从设置页预览备份。");

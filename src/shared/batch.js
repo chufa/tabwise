@@ -1,11 +1,13 @@
-const activeStates = new Set(["queued", "running", "stopping"]);
+import { isTaskActive } from "./task-state.js";
+import { archiveTaskRecord, retainTasks } from "./task-ledger.js";
+
 const retryStates = new Set(["pending", "failed", "uncertain"]);
 const size = (item) => item.size || 1;
 export function batchSummary(task) {
   const sum = (states) => task.results.filter((item) => states.includes(item.status)).reduce((count, item) => count + size(item), 0);
   return { ...task, total: task.results.reduce((count, item) => count + size(item), 0),
     count: sum(["succeeded"]), skipped: sum(["skipped"]), failed: sum(["failed", "uncertain"]),
-    settled: sum(["succeeded", "skipped", "failed", "uncertain"]), retryable: !activeStates.has(task.status) && task.results.some((item) => retryStates.has(item.status)) };
+    settled: sum(["succeeded", "skipped", "failed", "uncertain"]), retryable: !task.resolvedBy && !task.sessionExpired && !task.archivedAt && !isTaskActive(task.status) && task.results.some((item) => retryStates.has(item.status)) };
 }
 export function createBatchRunner({ read, write, execute, finalize = async () => ({}) }) {
   let storageQueue = Promise.resolve(), executionQueue = Promise.resolve();
@@ -20,11 +22,11 @@ export function createBatchRunner({ read, write, execute, finalize = async () =>
     return next;
   }
   const ready = mutate(async (tasks) => {
-    for (const task of tasks.filter((item) => activeStates.has(item.status))) {
+    for (const task of tasks.filter((item) => isTaskActive(item.status))) {
       task.status = "interrupted";
       task.reason = "后台已重启，请检查逐项结果后手动重试。";
       for (const item of task.results) if (item.status === "executing") item.status = "uncertain";
-      Object.assign(task, await finalize(batchSummary(task)));
+      if (!task.sessionExpired) Object.assign(task, await finalize(batchSummary(task)));
     }
   });
   // Startup storage failures are surfaced by every public method.
@@ -86,13 +88,14 @@ export function createBatchRunner({ read, write, execute, finalize = async () =>
     if (!Array.isArray(items) || !items.length || items.length > 5000) throw new Error("批量任务需包含 1–5000 个项目。");
     const id = crypto.randomUUID();
     await mutate((tasks) => {
-      if (tasks.filter((task) => activeStates.has(task.status)).length >= 10) throw new Error("已有 10 项任务进行中，请等待或停止后重试。");
+      const parent = retryOf && tasks.find((task) => task.id === retryOf);
+      if (retryOf && (!parent || !batchSummary(parent).retryable)) throw new Error("任务已重试或没有可重试项目。");
+      if (tasks.filter((task) => isTaskActive(task.status)).length >= 10) throw new Error("已有 10 项任务进行中，请等待或停止后重试。");
       const task = { id, name, kind, retryOf, createdAt: Date.now(), status: "queued", results: items.map((item, index) => ({ ...item, index: item.index ?? index, status: "pending" })) };
       tasks.unshift(task);
+      if (parent) parent.resolvedBy = id;
       // Active reservations may not be evicted.
-      const keep = tasks.filter((item) => activeStates.has(item.status));
-      const recent = tasks.filter((item) => !activeStates.has(item.status)).slice(0, Math.max(0, 10 - keep.length));
-      tasks.splice(0, tasks.length, ...[...keep, ...recent].sort((a, b) => b.createdAt - a.createdAt));
+      tasks.splice(0, tasks.length, ...retainTasks(tasks));
     });
     const promise = executionQueue.catch(() => {}).then(() => run(id));
     executionQueue = promise;
@@ -113,10 +116,16 @@ export function createBatchRunner({ read, write, execute, finalize = async () =>
       });
       return { ok: true };
     },
+    async archive(id) {
+      await detail(id);
+      await mutate((tasks) => archiveTaskRecord(tasks.find((task) => task.id === id)));
+      return { ok: true };
+    },
     async retry(id) {
       const task = await detail(id);
       if (!task.retryable) throw new Error("任务没有可重试项目。");
-      return start({ name: task.name, kind: task.kind, retryOf: id, items: task.results.filter((item) => retryStates.has(item.status)).map(({ undoItems, recordId, ok, error, reason, ...item }) => item) });
+      const result = await start({ name: task.name, kind: task.kind, retryOf: id, items: task.results.filter((item) => retryStates.has(item.status)).map(({ undoItems, recordId, ok, error, reason, ...item }) => item) });
+      return result;
     }
   };
 }

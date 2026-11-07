@@ -8,7 +8,10 @@ export const SITE_RISK_TEMPLATES = Object.freeze([
 ]);
 
 export function normalizeDomain(value) {
-  return value.trim().toLowerCase().replace(/^\*\./, "").replace(/^www\./, "");
+  const domain = String(value || "").trim().toLowerCase().replace(/^\*\./, "").replace(/^www\./, "");
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(domain) && domain.split(".").every((part) => Number(part) <= 255)) return domain;
+  if (!domain || domain.length > 253 || !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(domain)) return "";
+  return domain;
 }
 
 export function domainForUrl(url) {
@@ -61,6 +64,7 @@ export function applySiteRiskTemplate(settings = {}, templateId, domains) {
   const template = SITE_RISK_TEMPLATES.find((item) => item.id === templateId);
   if (!template) throw new Error("站点模板不存在。");
   const selected = [...new Set((domains || template.domains).map(normalizeDomain).filter(Boolean))];
+  if (!selected.length) throw new Error("请输入有效域名。");
   const keys = { never: "blockedDomains", manual: "manualDomains", native: "nativeDiscardDomains" };
   const key = keys[template.policy];
   return { ...settings, [key]: [...new Set([...(settings[key] || []), ...selected])] };

@@ -31,7 +31,9 @@ export async function verifyExpansion({ context, control, fixture, extensionUrl,
   // A real service-worker restart must not open more pages.
   await control.evaluate(async () => {
     const { restoreTasks } = await chrome.storage.session.get("restoreTasks");
-    await chrome.storage.session.set({ restoreTasks: [{ ...restoreTasks[0], id: "restart-task", status: "running", total: 1, indices: [0], results: [{ index: 0, status: "opening" }] }, ...restoreTasks] });
+    const next = [{ ...restoreTasks[0], id: "restart-task", status: "running", total: 1, indices: [0], results: [{ index: 0, status: "opening" }] }, ...restoreTasks];
+    await chrome.storage.local.set({ restoreTaskLedger: next });
+    await chrome.storage.session.set({ restoreTasks: next });
   });
   const worker = await waitForWorker(context);
   const cdp = await context.newCDPSession(control);
@@ -82,6 +84,7 @@ export async function verifyExpansion({ context, control, fixture, extensionUrl,
   await control.reload();
   await control.locator("[data-budget=preview]").waitFor();
   await control.locator("[data-budget=preview]").click();
+  await control.locator('.budget-preview input[type="checkbox"]').first().waitFor();
   const candidates = await control.locator(".budget-preview input").evaluateAll((inputs) => inputs.map((input) => Number(input.value)));
   assert.deepEqual(candidates, [budgetTabs[0].id]);
   await control.evaluate((id) => chrome.tabs.update(id, { active: true }), budgetTabs[0].id);

@@ -2,7 +2,7 @@ import { ALARM_NAME, ALARM_PERIOD_MINUTES, CHECKPOINT_ALARM_NAME, CHECKPOINT_PER
 import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isIdleLongEnough, isSuspendableUrl, isSuspendedUrl, normalizeDomain, planLocalOrganization, sitePolicyForUrl, smartSuspensionBlockReason, suspensionBlockReason } from "../shared/policy.js";
 import { addRecentSuspension, addRecoveryCheckpoint, addWorkspace, applySyncMetadata, clearDiagnostics, clearLocalHistory, getActivity, getDiagnostics, getObservedAt, getRecentSuspensions, getRecord, getRecords, getRecoveryCheckpoints, getResourceReviews, getResourceSnapshots, getSettings, getSyncHistory, getWorkspaces, migrateStorage, previewSyncMetadata, putRecord, removeActivity, removePrimaryRecord, removeRecentSuspension, removeRecord, removeRecordsForTab, removeResourceSnapshot, reportDiagnostic, restoreSyncHistory, saveResourceSnapshots, saveSettings, syncMetadata, touchTab } from "../shared/storage.js";
 import { buildSuspendCandidate, createPageIndex } from "../shared/search.js";
-import { buildHeapDiagnostics, buildRendererDiagnostics, summarizeHeapSnapshots } from "../shared/resource.js";
+import { summarizeHeapSnapshots } from "../shared/resource.js";
 import { buildResourceReclaimPlan } from "../shared/insights.js";
 import { AI_PLAN_SCHEMA, buildAiThemePrompt, publicAiSnapshot, selectAiPages, validateAiMembers, validateAiName, validateAiPlan } from "../shared/ai-analysis.js";
 import { buildOllamaRequest, normalizeOllamaEndpoint, normalizeOllamaModel, ollamaCapability, OLLAMA_PROBE_SCHEMA, validateOllamaProbe } from "../shared/ollama.js";
@@ -12,17 +12,25 @@ import { cacheAiPlan, cachedAiPlan } from "../shared/ai-cache.js";
 import { getAllWorkspaces, getWorkspaceTrash, updateWorkspace, validateWorkspaceCapacity, saveResourceReviews, changeSettings, changeWorkspaces, getClosedPages, removeClosedPage, queueStorage } from "../shared/storage.js";
 import { createRestorer, logicalTabs } from "./restoration.js";
 import { resolveSavedResult, sourceState } from "../shared/restoration.js";
-import { rotationBatch, mapConcurrent, mergeHeapSamples } from "../shared/scanning.js";
+import { rotationBatch, mapConcurrent } from "../shared/scanning.js";
 import { editWorkspace, mergeWorkspaces } from "../shared/workspaces.js";
 import { createReviewRunner } from "../shared/review-runner.js";
 import { buildSessionSnapshot, compareSnapshots } from "../shared/session.js";
 import { createPageTracker } from "./page-tracker.js";
 import { createWorkspaceUpdates } from "./workspace-updates.js";
-import { buildBudget, updateHeapHistory } from "../shared/budget.js";
+import { buildBudget } from "../shared/budget.js";
 import { createBackupManager } from "./backup.js";
 import { createBatchRunner } from "../shared/batch.js";
 import { buildLifecycle } from "../shared/lifecycle.js";
 import { buildHealth } from "../shared/health.js";
+import { createTaskCommands } from "./task-commands.js";
+import { createTaskLedger } from "./task-ledger.js";
+import { idleMinutesForUrl, normalizeIdleRules, temporaryProtectionReason } from "../shared/site-idle.js";
+import { normalizeWorkspaceFilters } from "../shared/workspace-metadata.js";
+import { getEffects, recordEffect } from "../shared/storage.js";
+import { createResources } from "./resources.js";
+import { suspensionTransaction } from "../shared/suspension-transaction.js";
+import { createOrganization } from "./organization.js";
 
 const extensionOrigin = chrome.runtime.getURL("").replace(/\/$/, "");
 const reportWorkerError = (error) => reportDiagnostic({ source: "service-worker", message: error?.message || String(error) }).catch(() => {});
@@ -48,14 +56,13 @@ function stateChanged(indexChanged = true) {
 }
 chrome.storage.onChanged?.addListener((changes) => {
   const indexKeys = ["workspaces", "recoveryCheckpoints", "recentSuspensions", "closedPages", "suspensionRecords", "suspensionRestoreRecords", "lastActivity", "settings"];
-  const displayKeys = [...indexKeys, "resourceSnapshots", "resourceReviews", "operationJournal", "restoreTasks", "batchTasks", "workspaceBindings"];
+const displayKeys = [...indexKeys, "resourceSnapshots", "resourceReviews", "operationJournal", "restoreTasks", "batchTasks", "workspaceBindings", "temporaryTabProtection", "effectHistory", "backupManagement"];
   if (Object.keys(changes).some((key) => displayKeys.includes(key))) stateChanged(Object.keys(changes).some((key) => indexKeys.includes(key)));
 });
 const tabQueues = new Map();
 const PAGE_PROTECTION_KEY = "pageProtectionStates";
 const PAGE_PROTECTION_SCRIPT_ID = "tabwise-page-protection";
 const SMART_ORIGINS = ["http://*/*", "https://*/*"];
-const DIAGNOSTIC_ORIGINS = ["http://*/*", "https://*/*"];
 const AI_SNAPSHOTS_KEY = "aiAnalysisSnapshots";
 const AI_CACHE_KEY = "aiThemeCache";
 const aiControllers = new Map();
@@ -70,17 +77,21 @@ const workspaceUpdates = createWorkspaceUpdates(currentSessionSnapshot, (workspa
 const backups = createBackupManager(sanitizeSettings);
 const reviewRunner = createReviewRunner({ read: getResourceReviews, write: saveResourceReviews, execute: executeResourceReview });
 reviewRunner.ready.catch(console.error);
-let resourceQueue = Promise.resolve();
 let scheduleQueue = Promise.resolve();
-const resourceVersions = new Map();
-const resourceEpoch = crypto.randomUUID();
+const resources = createResources({ foreground: () => livePorts.size > 0 });
+const refreshResourceSnapshots = resources.refresh;
+const getResourceDiagnostics = resources.diagnostics;
+const enableResourceSampling = resources.enable;
+const batchLedger = createTaskLedger("batch");
 const batchRunner = createBatchRunner({
-  read: async () => (await chrome.storage.session.get("batchTasks")).batchTasks || [],
-  write: (batchTasks) => chrome.storage.session.set({ batchTasks }),
+  read: batchLedger.read,
+  write: batchLedger.write,
   execute: executeBatchItem,
   finalize: finalizeBatch
 });
 batchRunner.ready.catch(console.error);
+const taskCommands = createTaskCommands({ batchRunner, restorer });
+const organizationTools = createOrganization({ block: batchBlock, revision: resources.revision });
 async function finalizeBatch(task) {
   if (task.operationId) return {};
   const records = Object.values(await getRecords()).filter((record) => record.reason === `batch:${task.id}` && record.state === SUSPENSION_STATES.SUSPENDED);
@@ -94,8 +105,10 @@ async function finalizeBatch(task) {
   return { operationId: entry.id };
 }
 async function batchBlock(tab, settings, expected) {
+  const protectedReason = await temporaryBlock(tab);
+  if (protectedReason) return protectedReason;
   if (expected.budget) return budgetBlock(tab, settings, expected);
-  if (tab.incognito || tab.url !== expected.url || (resourceVersions.get(tab.id) || 0) !== expected.revision) return "页面已变化。";
+  if (tab.incognito || tab.url !== expected.url || resources.revision(tab.id) !== expected.revision) return "页面已变化。";
   const [protection, activity] = await Promise.all([getProtectionStates(), getActivity()]);
   return (expected.group
     ? directSuspensionBlockReason(tab, extensionOrigin) || (tab.pinned || tab.audible ? "页面受保护。" : "") || (tab.index !== expected.index || tab.groupId !== expected.groupId ? "页面布局已变化。" : "")
@@ -121,7 +134,7 @@ async function executeBatchItem(item, task, remember) {
 async function startBatchSuspend(sender) {
   const [tabs, activity] = await Promise.all([chrome.tabs.query(sender?.tab?.windowId ? { windowId: sender.tab.windowId } : { currentWindow: true }), getActivity()]);
   return batchRunner.start({ name: "批量休眠", kind: "suspend", items: tabs.filter((tab) => Number.isInteger(tab.id)).map((tab) => ({
-    tabId: tab.id, title: tab.title, url: tab.url, revision: resourceVersions.get(tab.id) || 0, lastActivity: activity[tab.id]
+    tabId: tab.id, title: tab.title, url: tab.url, revision: resources.revision(tab.id), lastActivity: activity[tab.id]
   })) });
 }
 async function groupItems(message) {
@@ -131,7 +144,7 @@ async function groupItems(message) {
   const windows = new Map();
   for (const tab of tabs.filter(Boolean)) {
     if (!windows.has(tab.windowId)) windows.set(tab.windowId, []);
-    windows.get(tab.windowId).push({ tabId: tab.id, url: tab.url, group: true, groupId: tab.groupId, index: tab.index, revision: resourceVersions.get(tab.id) || 0, lastActivity: activity[tab.id] });
+    windows.get(tab.windowId).push({ tabId: tab.id, url: tab.url, group: true, groupId: tab.groupId, index: tab.index, revision: resources.revision(tab.id), lastActivity: activity[tab.id] });
   }
   const title = String(message.title || "Related tabs").slice(0, 80);
   return [...windows].filter(([, pages]) => pages.length >= 2).map(([windowId, pages]) => ({
@@ -152,7 +165,7 @@ async function prepareBatch(message, sender) {
     const [tabs, settings, activity] = await Promise.all([chrome.tabs.query(sender.tab?.windowId ? { windowId: sender.tab.windowId } : { currentWindow: true }), getSettings(), getActivity()]);
     pages = [];
     for (const tab of tabs) {
-      const page = { tabId: tab.id, title: tab.title, url: tab.url, windowId: tab.windowId, revision: resourceVersions.get(tab.id) || 0, lastActivity: activity[tab.id] };
+      const page = { tabId: tab.id, title: tab.title, url: tab.url, windowId: tab.windowId, revision: resources.revision(tab.id), lastActivity: activity[tab.id] };
       if (!await batchBlock(tab, settings, page)) pages.push(page);
     }
   }
@@ -180,18 +193,6 @@ async function startBatchPreview(message, sender) {
     await chrome.storage.session.set({ batchPreviews: batchPreviews.filter((item) => item.id !== preview.id) });
     return result;
   });
-}
-const publicTask = ({ results, ...task }) => task;
-async function taskDetail(message) {
-  const batch = (await batchRunner.list()).find((task) => task.id === message.taskId);
-  if (!batch) return restorer.detail(message.taskId, message.offset);
-  const offset = Math.max(0, Math.floor(Number(message.offset) || 0));
-  return { ...publicTask(batch), ok: true, itemTotal: batch.results.length, results: batch.results.slice(offset, offset + 50) };
-}
-function runResource(work) {
-  const next = resourceQueue.catch(() => {}).then(work);
-  resourceQueue = next;
-  return next;
 }
 const invalidatedAiTabs = new Set();
 let aiQueue = Promise.resolve();
@@ -346,6 +347,9 @@ function sanitizeSettings(current, update) {
   const pauseUntil = Number(update.pauseUntil);
   return {
     idleMinutes: Number.isFinite(idleMinutes) ? Math.min(1440, Math.max(5, Math.round(idleMinutes))) : current.idleMinutes,
+    siteIdleRules: update.siteIdleRules === undefined ? current.siteIdleRules : normalizeIdleRules(update.siteIdleRules),
+    workspaceFilters: update.workspaceFilters === undefined ? current.workspaceFilters : normalizeWorkspaceFilters(update.workspaceFilters),
+    backupReminderDays: Number.isFinite(Number(update.backupReminderDays)) ? Math.min(365, Math.max(0, Math.round(Number(update.backupReminderDays)))) : current.backupReminderDays,
     autoSuspend: typeof update.autoSuspend === "boolean" ? update.autoSuspend : current.autoSuspend,
     suspensionMode: update.suspensionMode === SUSPENSION_MODES.SMART || update.suspensionMode === SUSPENSION_MODES.CONSERVATIVE
       ? update.suspensionMode
@@ -374,7 +378,9 @@ function sanitizeSettings(current, update) {
     scheduledArchiveDays: Number.isFinite(Number(update.scheduledArchiveDays))
       ? Math.min(365, Math.max(7, Math.round(Number(update.scheduledArchiveDays))))
       : current.scheduledArchiveDays,
-    resourceSampling: typeof update.resourceSampling === "boolean" ? update.resourceSampling : current.resourceSampling,
+    resourceSampling: ["off", "low", "normal"].includes(update.resourceSamplingMode) ? update.resourceSamplingMode !== "off"
+      : typeof update.resourceSampling === "boolean" ? update.resourceSampling : current.resourceSampling,
+    resourceSamplingMode: ["off", "low", "normal"].includes(update.resourceSamplingMode) ? update.resourceSamplingMode : current.resourceSamplingMode,
     resourceBudgetEnabled: typeof update.resourceBudgetEnabled === "boolean" ? update.resourceBudgetEnabled : current.resourceBudgetEnabled,
     resourceBudgetTabs: Number.isFinite(Number(update.resourceBudgetTabs)) ? Math.min(1000, Math.max(1, Math.round(Number(update.resourceBudgetTabs)))) : current.resourceBudgetTabs,
     resourceBudgetHeapMB: Number.isFinite(Number(update.resourceBudgetHeapMB)) ? Math.min(65536, Math.max(64, Math.round(Number(update.resourceBudgetHeapMB)))) : current.resourceBudgetHeapMB,
@@ -494,21 +500,46 @@ async function rebindSuspendedTabs() {
 
 async function budgetBlock(tab, settings, expected) {
   if (!settings.resourceBudgetEnabled) return "资源预算已关闭。";
-  if (tab.incognito || tab.url !== expected.url || (resourceVersions.get(tab.id) || 0) !== expected.revision) return "页面已变化。";
+  if (tab.incognito || tab.url !== expected.url || resources.revision(tab.id) !== expected.revision) return "页面已变化。";
   const [protection, activity] = await Promise.all([getProtectionStates(), getActivity()]);
   return (settings.suspensionMode === SUSPENSION_MODES.SMART ? "" : suspensionBlockReason(tab, settings, extensionOrigin))
     || smartSuspensionBlockReason(tab, settings, extensionOrigin, protection[tab.id])
-    || (activity[tab.id] !== expected.lastActivity || !isIdleLongEnough(activity, tab.id, settings.idleMinutes * 60_000) ? "页面最近已活动。" : "");
+    || (activity[tab.id] !== expected.lastActivity || !isIdleLongEnough(activity, tab.id, idleMinutesForUrl(tab.url, settings) * 60_000) ? "页面最近已活动。" : "");
 }
+async function temporaryBlock(tab) {
+  const { temporaryTabProtection = {} } = await chrome.storage.session.get("temporaryTabProtection");
+  return temporaryProtectionReason(tab, temporaryTabProtection);
+}
+
+async function protectTab(message) {
+  const tab = await chrome.tabs.get(message.tabId);
+  if (!isSuspendableUrl(tab.url) || tab.incognito || tab.discarded) throw new Error("只能临时保护普通网页。");
+  if (!["hour", "session", "remove"].includes(message.duration)) throw new Error("临时保护期限无效。");
+  await queueStorage("session", async () => {
+    const { temporaryTabProtection = {} } = await chrome.storage.session.get("temporaryTabProtection");
+    if (message.duration === "remove") delete temporaryTabProtection[tab.id];
+    else temporaryTabProtection[tab.id] = { url: tab.url, until: message.duration === "session" ? 0 : Date.now() + 3_600_000 };
+    await chrome.storage.session.set({ temporaryTabProtection });
+  });
+  stateChanged();
+  return { ok: true };
+}
+
 async function suspendTab(tabId, reason = "manual", allowProtected = false, expected, aggregate = false) {
   return runForTab(tabId, async () => {
     let recordId;
     try {
       const [settings, tab] = await Promise.all([getSettings(), chrome.tabs.get(tabId)]);
+      const sample = (await getResourceSnapshots())[tabId];
+      const temporaryReason = await temporaryBlock(tab);
+      if (temporaryReason) return { ok: false, reason: temporaryReason };
       const blockReason = expected ? await batchBlock(tab, settings, expected) : allowProtected
         ? directSuspensionBlockReason(tab, extensionOrigin)
-        : suspensionBlockReason(tab, settings, extensionOrigin);
+        : settings.suspensionMode === SUSPENSION_MODES.SMART
+          ? smartSuspensionBlockReason(tab, settings, extensionOrigin, (await getProtectionStates())[tab.id])
+          : suspensionBlockReason(tab, settings, extensionOrigin);
       if (blockReason) return { ok: false, reason: blockReason };
+      if (reason === "idle" && !isIdleLongEnough(await getActivity(), tab.id, idleMinutesForUrl(tab.url, settings) * 60_000)) return { ok: false, reason: "页面尚未达到站点闲置阈值。" };
 
       recordId = crypto.randomUUID();
       const record = {
@@ -518,38 +549,57 @@ async function suspendTab(tabId, reason = "manual", allowProtected = false, expe
         originalUrl: tab.url,
         title: tab.title || domainForUrl(tab.url),
         suspendedAt: Date.now(),
+        mode: sitePolicyForUrl(tab.url, settings) === "native" || settings.suspensionStrategy === SUSPENSION_STRATEGIES.NATIVE_DISCARD
+          ? SUSPENSION_STRATEGIES.NATIVE_DISCARD : SUSPENSION_STRATEGIES.PLACEHOLDER,
         state: SUSPENSION_STATES.SUSPENDING,
         reason
       };
-      await putRecord(record);
-
+      return await suspensionTransaction({
+      record, reserve: (value) => putRecord(value, true), remove: removeRecord,
+      validate: async () => {
       const freshTab = await chrome.tabs.get(tabId);
-      const freshBlock = expected ? await batchBlock(freshTab, await getSettings(), expected) : "";
-      if (freshTab.url !== tab.url || freshTab.active || freshBlock) {
-        await removeRecord(recordId);
-        return { ok: false, reason: "Tab changed before suspension" };
+      const freshSettings = await getSettings();
+      const freshBlock = await temporaryBlock(freshTab) || (expected ? await batchBlock(freshTab, freshSettings, expected)
+        : allowProtected ? directSuspensionBlockReason(freshTab, extensionOrigin)
+          : freshSettings.suspensionMode === SUSPENSION_MODES.SMART
+            ? smartSuspensionBlockReason(freshTab, freshSettings, extensionOrigin, (await getProtectionStates())[tabId])
+            : suspensionBlockReason(freshTab, freshSettings, extensionOrigin));
+      const idleChanged = reason === "idle" && (!freshSettings.autoSuspend || freshSettings.pauseUntil > Date.now()
+        || !isIdleLongEnough(await getActivity(), tabId, idleMinutesForUrl(freshTab.url, freshSettings) * 60_000));
+      if (freshTab.url !== tab.url || freshTab.active || freshBlock || idleChanged) {
+        throw new Error("Tab changed before suspension");
       }
-
+      },
+      apply: async () => {
       let mode = SUSPENSION_STRATEGIES.PLACEHOLDER;
       if (sitePolicyForUrl(tab.url, settings) === "native" || settings.suspensionStrategy === SUSPENSION_STRATEGIES.NATIVE_DISCARD) {
         const discarded = await chrome.tabs.discard(tabId);
         if (!discarded?.discarded) {
-          await removeRecord(recordId);
-          return { ok: false, reason: "浏览器拒绝卸载该标签页" };
+          throw new Error("浏览器拒绝卸载该标签页");
         }
         mode = SUSPENSION_STRATEGIES.NATIVE_DISCARD;
       } else {
         const expectedUrl = `${chrome.runtime.getURL(SUSPENDED_PAGE)}#${recordId}`;
         await chrome.tabs.update(tabId, { url: expectedUrl });
       }
+      return mode;
+      },
+      inspect: async () => {
+        const current = await chrome.tabs.get(tabId);
+        if (isExpectedSuspensionUrl(current.url, extensionOrigin, recordId)
+          || current.url === record.originalUrl && current.discarded) return "applied";
+        return current.url === record.originalUrl && !current.discarded ? "unchanged" : "unknown";
+      },
+      finish: async (suspendedRecord) => {
       await removeResourceSnapshot(tabId).catch(console.error);
-      const suspendedRecord = { ...record, mode, state: SUSPENSION_STATES.SUSPENDED };
       await putRecord(suspendedRecord);
       await addRecentSuspension(suspendedRecord);
+      await recordEffect({ id: recordId, kind: "suspend", ok: true, mode: suspendedRecord.mode,
+        heapBytes: sample?.url === tab.url && Date.now() - sample.updatedAt < 300000 ? sample.usedJSHeapSize : undefined }).catch(reportWorkerError);
       if (!aggregate) await journal.record(`休眠 · ${suspendedRecord.title}`, [{ kind: "suspension", recordId }]).catch(console.error);
-      return { ok: true, recordId };
+      }
+      });
     } catch (error) {
-      if (recordId) await removeRecord(recordId);
       return { ok: false, error: true, reason: error.message || "休眠操作失败" };
     }
   });
@@ -568,9 +618,8 @@ async function restoreRecord(recordId, senderTabId) {
         await removeRecord(recordId);
         return { ok: true };
       }
+      await putRecord({ ...record, state: SUSPENSION_STATES.RESTORING, restoreStartedAt: Date.now() });
       await chrome.tabs.reload(tabId);
-      await removeRecord(recordId);
-      await removeRecentSuspension(recordId);
       await touchTab(tabId);
       return { ok: true };
     }
@@ -579,7 +628,7 @@ async function restoreRecord(recordId, senderTabId) {
     if (current.url !== expected) return { ok: false, reason: "This tab no longer matches the suspended page" };
     if (!isSuspendableUrl(record.originalUrl)) return { ok: false, reason: "The original URL is no longer supported" };
 
-    await putRecord({ ...record, state: SUSPENSION_STATES.RESTORING, tabId });
+    await putRecord({ ...record, state: SUSPENSION_STATES.RESTORING, restoreStartedAt: Date.now(), tabId });
     await chrome.tabs.update(tabId, { url: record.originalUrl });
     // Keep the recovery copy until the URL actually leaves the placeholder.
     await touchTab(tabId);
@@ -594,7 +643,6 @@ async function processIdleTabs() {
   const tabs = await chrome.tabs.query({});
   const protectionStates = settings.suspensionMode === SUSPENSION_MODES.SMART ? await getProtectionStates() : {};
   const activity = await getActivity();
-  const thresholdMs = settings.idleMinutes * 60_000;
   const { idleScanCursor = 0 } = await chrome.storage.session.get("idleScanCursor");
   const batch = rotationBatch(tabs, idleScanCursor, 50);
   await chrome.storage.session.set({ idleScanCursor: batch.cursor });
@@ -603,7 +651,7 @@ async function processIdleTabs() {
       ? smartSuspensionBlockReason(tab, settings, extensionOrigin, protectionStates[tab.id])
       : suspensionBlockReason(tab, settings, extensionOrigin);
     if (!tab.id || blockReason) continue;
-    if (isIdleLongEnough(activity, tab.id, thresholdMs)) await suspendTab(tab.id, "idle");
+    if (isIdleLongEnough(activity, tab.id, idleMinutesForUrl(tab.url, settings) * 60_000)) await suspendTab(tab.id, "idle");
   }
 }
 
@@ -680,23 +728,26 @@ async function restoreCheckpoint(checkpointId) {
 
 async function getDashboard() {
   await refreshResourceSnapshots();
+  const { temporaryTabProtection = {} } = await chrome.storage.session.get("temporaryTabProtection");
   const [settings, records, tabs, activity, observedAt, protectionStates, resourceSnapshots, workspaces] = await Promise.all([getSettings(), getRecords(), chrome.tabs.query({}), getActivity(), getObservedAt(), getProtectionStates(), getResourceSnapshots(), getWorkspaces()]);
   const recordsByTab = new Map(Object.values(records).map((record) => [record.tabId, record]));
   const rows = tabs.map((tab) => {
     const record = recordsByTab.get(tab.id);
     const legacySuspended = Boolean(record && isSuspendedUrl(tab.url, extensionOrigin));
     const nativeSuspended = Boolean(tab.discarded && (record?.mode === "native-discard" || !record));
-    const blockReason = record
+    const blockReason = temporaryProtectionReason(tab, temporaryTabProtection) || (record
       ? ""
       : settings.suspensionMode === SUSPENSION_MODES.SMART
         ? smartSuspensionBlockReason(tab, settings, extensionOrigin, protectionStates[tab.id])
-        : suspensionBlockReason(tab, settings, extensionOrigin);
+        : suspensionBlockReason(tab, settings, extensionOrigin));
     return {
       id: tab.id,
       title: record?.title || tab.title || "Untitled tab",
       url: record?.originalUrl || tab.url || "",
       domain: domainForUrl(record?.originalUrl || tab.url || ""),
       active: Boolean(tab.active),
+      temporarilyProtected: Boolean(temporaryProtectionReason(tab, temporaryTabProtection)),
+      idleMinutes: idleMinutesForUrl(tab.url, settings),
       incognito: Boolean(tab.incognito),
       suspended: legacySuspended || nativeSuspended,
       status: legacySuspended || nativeSuspended ? SUSPENSION_STATES.SUSPENDED : (record?.state || (blockReason ? "protected" : "live")),
@@ -709,12 +760,12 @@ async function getDashboard() {
       windowId: tab.windowId,
       memory: resourceSnapshots[tab.id] || null,
       budgetEligible: !tab.incognito && !blockReason && !smartSuspensionBlockReason(tab, settings, extensionOrigin, protectionStates[tab.id])
-        && isIdleLongEnough(activity, tab.id, settings.idleMinutes * 60_000)
+        && isIdleLongEnough(activity, tab.id, idleMinutesForUrl(tab.url, settings) * 60_000)
     };
   });
   const liveTabs = tabs.filter((tab) => !isSuspendedUrl(tab.url, extensionOrigin));
   const candidates = rows
-    .map((row) => buildSuspendCandidate(row, Date.now(), settings.idleMinutes))
+    .map((row) => buildSuspendCandidate(row, Date.now(), row.idleMinutes))
     .filter((candidate) => candidate.eligible)
     .sort((left, right) => right.score - left.score)
     .slice(0, 12);
@@ -722,6 +773,8 @@ async function getDashboard() {
   const { heapHistory = {} } = await chrome.storage.session.get("heapHistory");
   return {
     settings,
+    effects: await getEffects(),
+    backup: await backups.status(),
     tabs: rows,
     budget: buildBudget(rows, settings, heapHistory),
     organization: planLocalOrganization(liveTabs),
@@ -743,17 +796,17 @@ async function getDashboard() {
 async function getHealth() {
   const [history, tasks, bytesInUse] = await Promise.all([
     getSyncHistory(),
-    restorer.list(),
+    taskCommands.list(),
     typeof chrome.storage.local.getBytesInUse === "function" ? chrome.storage.local.getBytesInUse(null) : Promise.resolve(0)
   ]);
-  return buildHealth({ bytesInUse, quotaBytes: chrome.storage.local.QUOTA_BYTES || 10 * 1024 * 1024, sync: history[0], restoreTasks: tasks });
+  return buildHealth({ bytesInUse, quotaBytes: chrome.storage.local.QUOTA_BYTES || 10 * 1024 * 1024, sync: history[0], tasks });
 }
 
 async function prepareBudgetReclaim(sender) {
   if (!sender.documentId) throw new Error("请从 TabWise 界面预览回收。");
   const dashboard = await getDashboard();
   if (!dashboard.budget.enabled) throw new Error("请先在设置中开启资源预算。");
-  const pages = dashboard.budget.candidates.map((page) => ({ ...page, revision: resourceVersions.get(page.tabId) || 0 }));
+  const pages = dashboard.budget.candidates.map((page) => ({ ...page, revision: resources.revision(page.tabId) }));
   const preview = { id: crypto.randomUUID(), owner: sender.documentId, expiresAt: Date.now() + 5 * 60_000, pages };
   await queueStorage("session", async () => {
     const { budgetPreviews = [] } = await chrome.storage.session.get("budgetPreviews");
@@ -903,92 +956,6 @@ async function openSavedPage(page) {
   if (!isSuspendableUrl(page.url)) throw new Error("保存的地址不受支持。");
   await chrome.tabs.create({ url: page.url, active: true });
   return { ok: true, count: 1 };
-}
-
-async function getResourceDiagnostics() {
-  const tabs = (await chrome.tabs.query({})).filter((tab) => tab.id && isSuspendableUrl(tab.url) && !tab.discarded);
-  const hasProcessApi = Boolean(chrome.processes?.getProcessIdForTab && chrome.processes?.getProcessInfo);
-  const hasProcessPermission = hasProcessApi && await chrome.permissions.contains({ permissions: ["processes"] });
-  if (hasProcessPermission) {
-    await runResource(() => collectPageHeapDiagnostics(tabs, true));
-    const entries = await Promise.all(tabs.map(async (tab) => [tab, await chrome.processes.getProcessIdForTab(tab.id).catch(() => null)]));
-    const processIdByTab = new Map(entries.filter(([, processId]) => Number.isInteger(processId)).map(([tab, processId]) => [tab.id, processId]));
-    const processIds = [...new Set(processIdByTab.values())];
-    if (!processIds.length) return { ok: true, mode: "renderer", measuredAt: Date.now(), renderers: [] };
-    const processInfo = await chrome.processes.getProcessInfo(processIds, true);
-    return {
-      ok: true,
-      mode: "renderer",
-      measuredAt: Date.now(),
-      renderers: buildRendererDiagnostics(tabs, processIdByTab, processInfo)
-    };
-  }
-
-  return runResource(() => collectPageHeapDiagnostics(tabs, true));
-}
-
-async function collectPageHeapDiagnostics(tabs, persist) {
-  const hostsGranted = await chrome.permissions.contains({ origins: DIAGNOSTIC_ORIGINS });
-  if (!hostsGranted) return {
-    ok: false,
-    permissionRequest: { origins: DIAGNOSTIC_ORIGINS },
-    reason: "请允许网页访问权限，以测量各网页的 JavaScript 堆内存。"
-  };
-  const measurements = await mapConcurrent(tabs, 4, async (tab) => {
-    const version = resourceVersions.get(tab.id) || 0;
-    const result = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => {
-        const memory = performance.memory;
-        return memory ? {
-          usedJSHeapSize: memory.usedJSHeapSize,
-          totalJSHeapSize: memory.totalJSHeapSize
-        } : null;
-      }
-    }).catch(() => []);
-    return { tabId: tab.id, url: tab.url, heap: version === (resourceVersions.get(tab.id) || 0) && result[0]?.result
-      ? { ...result[0].result, revision: `${resourceEpoch}:${version}` } : null };
-  });
-  const current = await chrome.tabs.query({});
-  const previous = Object.fromEntries(Object.entries(await getResourceSnapshots()).filter(([id, sample]) => {
-    const version = resourceVersions.get(Number(id));
-    return version === undefined || sample.revision === `${resourceEpoch}:${version}`;
-  }));
-  const snapshots = mergeHeapSamples(previous, current, measurements, Date.now());
-  const heapByTab = new Map(tabs.filter((tab) => snapshots[tab.id]?.url === tab.url).map((tab) => [tab.id, snapshots[tab.id]]));
-  const measuredAt = Date.now();
-  if (persist) {
-    await saveResourceSnapshots(snapshots);
-    await queueStorage("session", async () => {
-      const { heapHistory = {} } = await chrome.storage.session.get("heapHistory");
-      await chrome.storage.session.set({ heapHistory: updateHeapHistory(heapHistory, snapshots) });
-    });
-  }
-  return {
-    ok: true,
-    mode: "heap",
-    measuredAt,
-    renderers: buildHeapDiagnostics(tabs, heapByTab)
-  };
-}
-
-function refreshResourceSnapshots(force = false) {
-  return runResource(async () => {
-  const settings = await getSettings();
-  if (!settings.resourceSampling) return;
-  const { heapScanState = {} } = await chrome.storage.session.get("heapScanState");
-  if (!force && Date.now() - (heapScanState.at || 0) < ALARM_PERIOD_MINUTES * 60_000) return;
-  const tabs = (await chrome.tabs.query({})).filter((tab) => tab.id && isSuspendableUrl(tab.url) && !tab.discarded);
-  const batch = rotationBatch(tabs, heapScanState.cursor, 25);
-  await chrome.storage.session.set({ heapScanState: { at: Date.now(), cursor: batch.cursor } });
-  await collectPageHeapDiagnostics(force ? tabs : batch.items, true);
-  });
-}
-
-async function enableResourceSampling() {
-  const settings = await getSettings();
-  await saveSettings({ ...settings, resourceSampling: true });
-  return { ok: true };
 }
 
 async function fetchOllama(endpoint, path, init = {}, timeoutMs = 30_000, signal) {
@@ -1227,19 +1194,28 @@ chrome.tabGroups?.onCreated?.addListener(() => stateChanged());
 chrome.tabGroups?.onRemoved?.addListener(() => stateChanged());
 chrome.tabs.onDetached.addListener((tabId) => { invalidateAiTab(tabId); stateChanged(); });
 chrome.tabs.onRemoved.addListener(async (tabId) => {
-  resourceVersions.set(tabId, (resourceVersions.get(tabId) || 0) + 1);
+  resources.invalidate(tabId, true).catch(console.error);
   invalidateAiTab(tabId);
   await pageTracker.close(tabId);
   await Promise.all([removeActivity(tabId), removeRecordsForTab(tabId), removeProtectionState(tabId)]);
+  await queueStorage("session", async () => {
+    const { temporaryTabProtection = {} } = await chrome.storage.session.get("temporaryTabProtection");
+    delete temporaryTabProtection[tabId];
+    await chrome.storage.session.set({ temporaryTabProtection });
+  });
   stateChanged();
 });
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (tab) pageTracker.remember(tab).catch(console.error);
   stateChanged(Boolean(changeInfo.url || changeInfo.title !== undefined || changeInfo.discarded !== undefined || changeInfo.pinned !== undefined));
   if (changeInfo.url || changeInfo.title !== undefined || changeInfo.status === "loading") invalidateAiTab(tabId);
+  if (changeInfo.url) queueStorage("session", async () => {
+    const { temporaryTabProtection = {} } = await chrome.storage.session.get("temporaryTabProtection");
+    if (temporaryTabProtection[tabId]?.url !== changeInfo.url) delete temporaryTabProtection[tabId];
+    await chrome.storage.session.set({ temporaryTabProtection });
+  }).catch(console.error);
   if (changeInfo.url || changeInfo.discarded !== undefined || changeInfo.status === "loading") {
-    resourceVersions.set(tabId, (resourceVersions.get(tabId) || 0) + 1);
-    Promise.all([removeProtectionState(tabId), runResource(() => removeResourceSnapshot(tabId))]).catch(console.error);
+    Promise.all([removeProtectionState(tabId), resources.invalidate(tabId)]).catch(console.error);
   }
   if (changeInfo.status !== "complete") return;
   (async () => {
@@ -1250,6 +1226,10 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (record && isExpectedSuspensionUrl(tab.url, extensionOrigin, record.recordId)) return;
     if (isSuspendedUrl(tab.url, extensionOrigin)) return;
     if (record) {
+      if (tab.url === record.originalUrl && !tab.discarded && (record.state === SUSPENSION_STATES.RESTORING || record.mode === "native-discard")) {
+        await recordEffect({ id: record.recordId, kind: "restore", ok: true, mode: record.mode,
+          latencyMs: record.restoreStartedAt ? Date.now() - record.restoreStartedAt : undefined }).catch(reportWorkerError);
+      }
       if (record.state === SUSPENSION_STATES.RESTORING) await removeRecord(record.recordId);
       else await removePrimaryRecord(record.recordId);
       if (record.mode === "native-discard") await removeRecentSuspension(record.recordId);
@@ -1302,7 +1282,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     clearLocalHistory: async () => { await clearLocalHistory(); return { ok: true }; },
     syncMetadata,
     previewSyncMetadata,
-    applySyncMetadata: () => applySyncMetadata(message.resolutions),
+    applySyncMetadata: () => applySyncMetadata(message.resolutions, { previewId: message.previewId, workspaceIds: message.workspaceIds }),
     getSyncHistory,
     restoreSyncHistory: () => restoreSyncHistory(message.historyId),
     prepareBudgetReclaim: () => prepareBudgetReclaim(sender),
@@ -1312,11 +1292,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     prepareBatch: () => prepareBatch(message, sender),
     startBatchPreview: () => startBatchPreview(message, sender),
     startBatchGroup: () => startBatchGroup(message),
-    getTasks: async () => [...(await batchRunner.list()).map(publicTask), ...(await restorer.list()).map((task) => ({ ...task, kind: "restore" }))].sort((a, b) => b.createdAt - a.createdAt),
-    getTask: () => taskDetail(message),
-    stopTask: async () => (await batchRunner.list()).some((task) => task.id === message.taskId) ? batchRunner.stop(message.taskId) : restorer.stop(message.taskId),
-    retryTask: async () => (await batchRunner.list()).some((task) => task.id === message.taskId) ? batchRunner.retry(message.taskId) : restorer.retry(message.taskId),
-    resumeRestoreTask: () => restorer.resume(message.taskId),
+    getTasks: () => taskCommands.list(message.includeArchived === true),
+    getTask: () => taskCommands.detail(message),
+    stopTask: () => taskCommands.stop(message),
+    retryTask: () => taskCommands.retry(message),
+    resumeRestoreTask: () => taskCommands.resume(message),
+    archiveTask: () => taskCommands.archive(message),
     getResourceDiagnostics,
     getOperations: async () => (await getOperations()).map(({ id, label, createdAt, status, results, items }) => ({ id, label, createdAt, status, results, count: items.length })),
     undoOperation: () => runOperation(() => journal.undo(message.operationId)),
@@ -1329,7 +1310,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     getSuspendedRecord: () => getSuspendedRecordForSender(message.recordId, sender),
     suspendTab: () => suspendTab(message.tabId),
     directSuspendTab: () => suspendTab(message.tabId, "direct", true),
-    restoreRecord: () => restoreRecord(message.recordId, sender.tab?.id),
+    protectTab: () => protectTab(message),
+    unprotectTab: () => protectTab({ ...message, duration: "remove" }),
+    restoreRecord: () => restoreRecord(message.recordId,
+      sender.url?.startsWith(chrome.runtime.getURL(SUSPENDED_PAGE) + "#") ? sender.tab?.id : undefined),
     updateSettings: async () => {
       const next = await changeSettings((current) => sanitizeSettings(current, message.settings || {}));
       if (!next.closedHistoryEnabled) await removeClosedPage();
@@ -1366,7 +1350,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     runResourceReview: () => runResourceReview("manual"),
     restoreRecentSuspension: () => restoreRecentSuspension(message.recordId),
     restoreCheckpoint: () => restoreCheckpoint(message.checkpointId),
-    exportBackup: () => backups.export(message),
+    exportBackup: () => backups.export(message, sender),
+    backupDownloadRequested: () => backups.downloadRequested(message.exportRequestId, sender),
+    getBackupStatus: () => backups.status(),
+    drillBackup: () => backups.drill(message.backup, message.password),
     prepareBackupImport: () => backups.prepare(message.backup, sender, message.password),
     confirmBackupImport: async () => {
       const result = await runOperation(() => backups.confirm(message, sender));
@@ -1387,6 +1374,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     stopRestoreTask: () => restorer.stop(message.taskId),
     retryRestoreTask: () => restorer.retry(message.taskId),
     getWorkspaceTrash,
+    getWorkspaceFilters: async () => (await getSettings()).workspaceFilters,
+    prepareDuplicateConsolidation: () => organizationTools.duplicates(message, sender),
+    consolidateDuplicates: () => runOperation(() => organizationTools.consolidate(message, sender)),
+    prepareWorkspaceLinkCheck: () => organizationTools.prepareLinks(message, sender),
+    checkWorkspaceLinks: () => organizationTools.links(message, sender),
+    saveWorkspaceFilters: async () => {
+      await changeSettings((settings) => ({ ...settings, workspaceFilters: normalizeWorkspaceFilters(message.filters) }));
+      return { ok: true };
+    },
     bindWorkspace: () => runOperation(() => workspaceUpdates.bind(message.workspaceId, sender)),
     getWorkspaceBindings: () => workspaceUpdates.bindings(),
     getWorkspaceVersions: () => workspaceUpdates.versions(message.workspaceId),
@@ -1395,7 +1391,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     editWorkspace: () => runOperation(async () => {
       const workspace = (await getWorkspaces()).find((item) => item.id === message.workspaceId);
       if (!workspace || sourceState(workspace) !== message.signature) throw new Error("工作区已变化，请重新编辑。");
-      const update = editWorkspace(workspace, message.name, message.indices);
+      const update = editWorkspace(workspace, message.name, message.indices, message.metadata);
       await updateWorkspaceOperation(workspace, update, journal);
       return { ok: true };
     }),

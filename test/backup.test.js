@@ -81,3 +81,10 @@ test("encrypted backup requires its password and retains the verified backup pay
   assert.equal(decoded.verified, true);
   assert.equal(decoded.workspaces[0].tabs.length, 1000);
 });
+
+test("legacy encryption parameters remain readable but require re-encryption", async () => {
+  const encrypted = await createEncryptedBackup({ workspaces: [workspace()], password: "correct horse battery staple", iterations: 10_000 });
+  const decoded = await readBackup(encrypted, "correct horse battery staple");
+  assert.equal(decoded.needsReencryption, true);
+  assert.ok(decoded.warnings.some((warning) => warning.includes("重新加密")));
+});

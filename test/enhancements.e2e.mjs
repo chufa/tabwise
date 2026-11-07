@@ -166,21 +166,28 @@ export async function verifyEnhancements({ context, control, fixture, extensionU
     await control.evaluate(({ id, url }) => chrome.tabs.update(id, { url }), { id: selectedIds[5], url: `${fixture.baseUrl}/batch-changed` });
     await waitForBrowserState(control, async ({ id, url }) => { const tab = await chrome.tabs.get(id); return tab.status === "complete" && !tab.pendingUrl && tab.url === url; },
       { id: selectedIds[5], url: `${fixture.baseUrl}/batch-changed` });
-    const retried = await message(control, "retryTask", { taskId: started.taskId });
+    const retried = await message(control, "retryTask", { taskId: started.taskId, taskType: "batch" });
     await waitForBrowserState(control, async (id) => (await chrome.runtime.sendMessage({ type: "getTask", taskId: id })).status === "completed", retried.taskId);
     const retriedDetail = await message(control, "getTask", { taskId: retried.taskId });
     assert.equal(retriedDetail.count, 6);
     assert.equal(retriedDetail.skipped, 1);
     const undo = await message(control, "undoOperation", { operationId: stopped.operationId });
     assert.equal(undo.restored, 5);
+    await waitForBrowserState(control, async (expected) => {
+      const tabs = await Promise.all(expected.map((page) => chrome.tabs.get(page.tabId)));
+      return tabs.every((tab, index) => tab.url === expected[index].url && !tab.pendingUrl && tab.status === "complete");
+    }, preview.pages.slice(-12).slice(0, 5));
   } finally {
     await batchWorker.evaluate(() => { globalThis.releaseBatchUpdate?.(); chrome.tabs.update = globalThis.batchUpdate; delete globalThis.batchUpdate; delete globalThis.releaseBatchUpdate; });
   }
   const urlsBeforeRestart = await control.evaluate(() => chrome.tabs.query({}).then((tabs) => tabs.map((tab) => [tab.id, tab.url])));
   await control.evaluate(async () => {
     const { batchTasks } = await chrome.storage.session.get("batchTasks");
-    await chrome.storage.session.set({ batchTasks: [{ id: "unified-restart", name: "批量中断验证", kind: "suspend", status: "running", createdAt: Date.now(),
-      results: [{ index: 0, status: "executing", tabId: -1, url: "https://unused.test/" }, { index: 1, status: "pending", tabId: -2, url: "https://unused.test/2" }] }, ...batchTasks].slice(0, 10) });
+    const next = [{ id: "unified-restart", name: "批量中断验证", kind: "suspend", status: "running", createdAt: Date.now(),
+      results: [{ index: 0, status: "executing", tabId: -1, url: "https://unused.test/" }, { index: 1, status: "pending", tabId: -2, url: "https://unused.test/2" }] }, ...batchTasks].slice(0, 10);
+    const { batchLedgerSnapshot } = await import(chrome.runtime.getURL("src/shared/task-ledger.js"));
+    await chrome.storage.local.set({ batchTaskLedger: batchLedgerSnapshot(next) });
+    await chrome.storage.session.set({ batchTasks: next });
   });
   const cdp = await context.newCDPSession(control);
   const { targetInfos } = await cdp.send("Target.getTargets");

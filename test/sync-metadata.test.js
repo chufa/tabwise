@@ -40,3 +40,14 @@ test("sync metadata carries a monotonic revision and produces a bounded history-
   assert.deepEqual(entry.summary, { workspaces: 1, policies: 0 });
   assert.equal(entry.metadata.version.parentRevision, 6);
 });
+test("choosing an empty local site policy cannot silently reintroduce remote entries", () => {
+  const remote = buildSyncMetadata({ settings: { trustedDomains: ["remote.test"] } });
+  const resolved = resolveSyncPlan(planSyncMetadata({ settings: { trustedDomains: [] } }, remote), { "policy:trustedDomains": "local" });
+  assert.deepEqual(resolved.sitePolicies.trustedDomains, []);
+});
+test("sync omits local history and private notes", () => {
+  const metadata = buildSyncMetadata({ workspaces: [{ id: "w", name: "W", notes: "private", tabs: [], versions: [{ notes: "old private" }], mergeSources: [{ notes: "source private" }] }] });
+  assert.equal(JSON.stringify(metadata).includes("private"), false);
+  assert.equal("versions" in metadata.workspaces[0], false);
+  assert.equal("mergeSources" in metadata.workspaces[0], false);
+});

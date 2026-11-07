@@ -1,5 +1,5 @@
 import { createSelection } from "./selection.js";
-import { escapeHtml } from "./html.js";
+import { escapeHtml, highlightMatch } from "./html.js";
 import { updateHTML } from "./live-ui.js";
 
 export function createPagedList(host, { key = (item) => item.index, selected = false, selectable = true, limit = Infinity, render, onChange = () => {} } = {}) {
@@ -11,7 +11,7 @@ export function createPagedList(host, { key = (item) => item.index, selected = f
     const view = model.view();
     updateHTML(host.querySelector(".paged-rows"), view.items.map((item) => {
       const value = key(item);
-      const body = render ? render(item) : `<span><strong>${escapeHtml(item.title || item.url)}</strong><small>${escapeHtml(item.url || item.domain || "")}</small></span>`;
+      const body = render ? render(item, search.value) : `<span><strong>${highlightMatch(item.title || item.url, search.value)}</strong><small>${highlightMatch(item.url || item.domain || "", search.value)}</small></span>`;
       return `<${selectable ? "label" : "div"} class="saved-member" data-key="${escapeHtml(value)}">${selectable ? `<input type="checkbox" value="${escapeHtml(value)}" ${model.has(value) ? "checked" : ""}>` : ""}${body}</${selectable ? "label" : "div"}>`;
     }).join("") || '<p class="saved-hint">暂无匹配项。</p>');
     const count = host.querySelector(".list-selection");

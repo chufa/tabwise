@@ -1,10 +1,13 @@
-import { getWorkspaces, getRecoveryCheckpoints, getRecords, putRecord, queueStorage } from "../shared/storage.js";
-import { sourceState, selectedRestorePages } from "../shared/restoration.js";
+import { getWorkspaces, getRecoveryCheckpoints, getRecords, putRecord, queueStorage, updateWorkspace } from "../shared/storage.js";
+import { normalizeRestorePreset } from "../shared/workspace-presets.js";
+import { sourceState, selectedRestorePages, restoreLoadOptions } from "../shared/restoration.js";
 import { mapConcurrent } from "../shared/scanning.js";
 import { appendRestoreAudit, resumeRestoreIndices } from "../shared/restore-audit.js";
+import { isTaskActive } from "../shared/task-state.js";
+import { archiveTaskRecord, retainTasks } from "../shared/task-ledger.js";
+import { createTaskLedger } from "./task-ledger.js";
 
 const KEY = "restorePreviews";
-const DURABLE_TASK_KEY = "restoreTaskLedger";
 
 export async function logicalTabs() {
   const [tabs, records] = await Promise.all([chrome.tabs.query({}), getRecords()]);
@@ -44,18 +47,16 @@ async function waitForLoad(tabId) {
 
 export function createRestorer(markWorkspace) {
   let queue = Promise.resolve();
-  const active = new Set(["queued", "running", "stopping"]);
-  const ready = queueStorage("session", async () => {
-    const { restoreTasks = [] } = await chrome.storage.session.get("restoreTasks");
-    const { [DURABLE_TASK_KEY]: durable = [] } = await chrome.storage.local.get(DURABLE_TASK_KEY);
-    const source = restoreTasks.length ? restoreTasks : durable;
-    const normalized = source.map((task) => active.has(task.status) ? {
+  const ledger = createTaskLedger("restore");
+  const ready = ledger.ready.then(() => queueStorage("session", async () => {
+    const source = await ledger.read();
+    const normalized = source.map((task) => isTaskActive(task.status) ? {
       ...task, status: "interrupted", updatedAt: Date.now(),
       audit: appendRestoreAudit(task.audit, "interrupted", { reason: "worker restart" }),
       results: task.results.map((item) => item.status === "opening" ? { ...item, status: "uncertain", reason: "恢复中断，页面是否已打开需要重新检查。" } : item)
     } : task);
-    await Promise.all([chrome.storage.session.set({ restoreTasks: normalized }), chrome.storage.local.set({ [DURABLE_TASK_KEY]: normalized })]);
-  });
+    await ledger.write(normalized);
+  }));
   ready.catch(console.error);
   async function readTasks() { await ready; return (await chrome.storage.session.get("restoreTasks")).restoreTasks || []; }
   function mutate(id, work) {
@@ -65,7 +66,7 @@ export function createRestorer(markWorkspace) {
       if (!task) throw new Error("恢复任务不存在。");
       work(task);
       task.updatedAt = Date.now();
-      await Promise.all([chrome.storage.session.set({ restoreTasks }), chrome.storage.local.set({ [DURABLE_TASK_KEY]: restoreTasks })]);
+      await ledger.write(restoreTasks);
       return task;
     });
   }
@@ -75,20 +76,21 @@ export function createRestorer(markWorkspace) {
     skipped: results.filter((item) => item.status === "skipped").length,
     failed: results.filter((item) => ["failed", "closed", "uncertain"].includes(item.status)).length,
     settled: results.filter((item) => !["pending", "opening"].includes(item.status)).length,
-    retryable: !active.has(task.status) && results.some((item) => ["failed", "closed", "uncertain", "pending"].includes(item.status)),
-    resumable: !active.has(task.status) && resumeRestoreIndices(results).length > 0
+    retryable: !task.resolvedBy && !task.archivedAt && !isTaskActive(task.status) && results.some((item) => ["failed", "closed", "uncertain", "pending"].includes(item.status)),
+    resumable: !task.resolvedBy && !task.archivedAt && !isTaskActive(task.status) && resumeRestoreIndices(results).length > 0
   });
   async function detail(id, offset = 0) {
     const task = (await readTasks()).find((item) => item.id === id);
     if (!task) throw new Error("恢复任务不存在。");
     offset = Math.max(0, Math.floor(Number(offset) || 0));
-    return { ok: true, ...summary(task), offset, results: task.results.slice(offset, offset + 50) };
+    return { ok: true, ...summary(task), offset, itemTotal: task.results.length, results: task.results.slice(offset, offset + 50) };
   }
   const progress = (id, result) => mutate(id, (task) => {
     const index = task.results.findIndex((item) => item.index === result.index);
     task.results[index] = { ...task.results[index], ...result };
   });
-  async function restore(kind, source, indices, skipExisting, windowId, restoreLayout = false, taskId) {
+  async function restore(kind, source, indices, skipExisting, windowId, restoreLayout = false, taskId, options = {}) {
+    const { loadMode, concurrency } = restoreLoadOptions(options);
     restoreLayout = restoreLayout && source.schemaVersion === 2;
     const existing = new Set((await logicalTabs()).map((tab) => tab.logicalUrl));
     const pages = selectedRestorePages(source.tabs, indices, existing, skipExisting);
@@ -103,9 +105,9 @@ export function createRestorer(markWorkspace) {
       return { windowId: window.windowId };
     }
     // Each batch settles before the next one starts; API failures are per page.
-    for (let offset = 0; offset < pages.length; offset += 5) {
+    for (let offset = 0; offset < pages.length; offset += concurrency) {
       if (taskId && (await readTasks()).find((task) => task.id === taskId)?.status === "stopping") break;
-      const batch = pages.slice(offset, offset + 5);
+      const batch = pages.slice(offset, offset + concurrency);
       const current = await savedSource(kind, source.id).catch(() => null);
       if (!current || sourceState(current) !== sourceState(source)) {
         const failed = pages.slice(offset).map((page) => ({ index: page.index, title: page.title, status: "failed", reason: "保存内容在恢复期间发生变化，请重新预览。" }));
@@ -122,19 +124,19 @@ export function createRestorer(markWorkspace) {
           // Durable intent precedes window/tab creation. Restart never replays it.
           if (taskId) await progress(taskId, { index: page.index, status: "opening" });
           const target = await destination(page);
-          const sleeping = restoreLayout && page.status === "suspended";
+          const sleeping = loadMode === "on-demand" || restoreLayout && page.status === "suspended";
           const tab = target.anchor || await chrome.tabs.create({ url: sleeping ? "about:blank" : page.url, active: false, ...(target.windowId ? { windowId: target.windowId } : {}) });
           if (taskId) await progress(taskId, { index: page.index, status: "opening", tabId: tab.id });
           let recordId;
           if (sleeping) {
             recordId = crypto.randomUUID();
-            await putRecord({ recordId, tabId: tab.id, windowId: target.windowId, title: page.title || page.url, originalUrl: page.url, mode: "placeholder", state: "suspended", suspendedAt: Date.now(), reason: "snapshot" });
+            await putRecord({ recordId, tabId: tab.id, windowId: target.windowId, title: page.title || page.url, originalUrl: page.url, mode: "placeholder", state: "suspended", suspendedAt: Date.now(), reason: "snapshot" }, true);
             await chrome.tabs.update(tab.id, { url: chrome.runtime.getURL("src/suspended/suspended.html") + `#${recordId}` });
           } else if (target.anchor) await chrome.tabs.update(tab.id, { url: page.url });
-          return { index: page.index, title: page.title, tabId: tab.id, recordId, windowId: target.windowId, status: await waitForLoad(tab.id) };
+          return { index: page.index, title: page.title, tabId: tab.id, recordId, windowId: target.windowId, onDemand: sleeping, status: await waitForLoad(tab.id) };
         } catch (error) { return { index: page.index, title: page.title, status: "failed", reason: error.message }; }
       };
-      const batchResults = await mapConcurrent(batch, 5, async (page) => {
+      const batchResults = await mapConcurrent(batch, concurrency, async (page) => {
         const result = await restorePage(page);
         if (taskId) await progress(taskId, result);
         return result;
@@ -186,14 +188,17 @@ export function createRestorer(markWorkspace) {
       total: options.indices.length, results: options.indices.map((index) => ({ index, title: source.tabs[index].title, status: "pending" })) };
     await queueStorage("session", async () => {
       const tasks = await readTasks();
-      if (tasks.filter((item) => active.has(item.status)).length >= 5) throw new Error("请先完成或停止当前恢复任务。");
-      const next = [task, ...tasks.filter((item) => active.has(item.status)), ...tasks.filter((item) => !active.has(item.status)).slice(0, 9 - tasks.filter((item) => active.has(item.status)).length)];
-      await Promise.all([chrome.storage.session.set({ restoreTasks: next }), chrome.storage.local.set({ [DURABLE_TASK_KEY]: next })]);
+      const parentId = options.retryOf || options.resumeOf;
+      const parent = parentId && tasks.find((item) => item.id === parentId);
+      if (parentId && (!parent || !(options.retryOf ? summary(parent).retryable : summary(parent).resumable))) throw new Error("此任务已继续或重试，请查看后续任务。");
+      if (tasks.filter((item) => isTaskActive(item.status)).length >= 5) throw new Error("请先完成或停止当前恢复任务。");
+      if (parent) parent.resolvedBy = task.id;
+      await ledger.write(retainTasks([task, ...tasks]));
     });
     run(async () => {
       try {
         await mutate(task.id, (item) => { if (item.status === "queued") { item.status = "running"; item.audit = appendRestoreAudit(item.audit, "started", { total: item.total }); } });
-        const result = await restore(task.kind, source, task.indices, task.skipExisting, task.windowId, task.restoreLayout, task.id);
+        const result = await restore(task.kind, source, task.indices, task.skipExisting, task.windowId, task.restoreLayout, task.id, task);
         await mutate(task.id, (item) => { item.status = item.status === "stopping" ? "stopped" : "completed"; item.layoutErrors = result.layoutErrors; item.audit = appendRestoreAudit(item.audit, item.status, { count: result.count, skipped: result.skipped, failed: result.failed }); });
       } catch (error) {
         await mutate(task.id, (item) => {
@@ -210,26 +215,31 @@ export function createRestorer(markWorkspace) {
     async list() { return (await readTasks()).map(summary); },
     async stop(id) {
       await ready;
-      await mutate(id, (task) => { if (active.has(task.status)) task.status = "stopping"; });
+      await mutate(id, (task) => { if (isTaskActive(task.status)) task.status = "stopping"; });
+      return { ok: true };
+    },
+    async archive(id) {
+      await ready;
+      await mutate(id, archiveTaskRecord);
       return { ok: true };
     },
     async retry(id) {
       const task = (await readTasks()).find((item) => item.id === id);
-      if (!task || active.has(task.status)) throw new Error("请先等待当前恢复任务结束。");
+      if (!task || task.resolvedBy || task.archivedAt || isTaskActive(task.status)) throw new Error("请查看后续任务，或重新预览已归档任务。");
       const source = await savedSource(task.kind, task.sourceId);
       if (sourceState(source) !== task.signature) throw new Error("保存内容已变化，请重新预览。");
       const indices = task.results.filter((page) => ["failed", "closed", "uncertain", "pending"].includes(page.status)).map((page) => page.index);
       if (!indices.length) throw new Error("没有需要重试的页面。");
-      return enqueue(source, { kind: task.kind, indices, skipExisting: true, windowId: task.windowId, restoreLayout: task.restoreLayout, retryOf: id });
+      return enqueue(source, { kind: task.kind, indices, skipExisting: true, windowId: task.windowId, restoreLayout: task.restoreLayout, retryOf: id, ...restoreLoadOptions(task) });
     },
     async resume(id) {
       const task = (await readTasks()).find((item) => item.id === id);
-      if (!task || active.has(task.status)) throw new Error("请先等待当前恢复任务结束。");
+      if (!task || task.resolvedBy || task.archivedAt || isTaskActive(task.status)) throw new Error("请查看后续任务，或重新预览已归档任务。");
       const source = await savedSource(task.kind, task.sourceId);
       if (sourceState(source) !== task.signature) throw new Error("保存内容已变化，请重新预览。");
       const indices = resumeRestoreIndices(task.results);
       if (!indices.length) throw new Error("没有可以安全继续的页面。");
-      return enqueue(source, { kind: task.kind, indices, skipExisting: true, windowId: task.windowId, restoreLayout: task.restoreLayout, resumeOf: id });
+      return enqueue(source, { kind: task.kind, indices, skipExisting: true, windowId: task.windowId, restoreLayout: task.restoreLayout, resumeOf: id, ...restoreLoadOptions(task) });
     },
     start(message, sender) {
       return queueStorage("session", async () => {
@@ -240,8 +250,12 @@ export function createRestorer(markWorkspace) {
         if (sourceState(source) !== preview.signature) throw new Error("保存内容已变化，请重新预览。");
         selectedRestorePages(source.tabs, message.indices, new Set(), true);
         await chrome.storage.session.set({ [KEY]: restorePreviews.filter((item) => item.id !== preview.id) });
-        return { source, options: { kind: preview.kind, indices: [...new Set(message.indices)], windowId: preview.windowId, skipExisting: message.skipExisting !== false, restoreLayout: message.restoreLayout === true } };
-      }).then(({ source, options }) => enqueue(source, options));
+        return { source, options: { kind: preview.kind, indices: [...new Set(message.indices)], windowId: preview.windowId, skipExisting: message.skipExisting !== false, restoreLayout: message.restoreLayout === true, ...restoreLoadOptions(message) } };
+      }).then(async ({ source, options }) => {
+        if (options.kind === "workspace" && message.rememberPreset === true) await updateWorkspace(source.id,
+          { restorePreset: normalizeRestorePreset({ ...options, tag: message.tag }) });
+        return enqueue(source, options);
+      });
     },
     prepare(kind, id, sender, signature) {
       return queueStorage("session", async () => {
@@ -253,7 +267,9 @@ export function createRestorer(markWorkspace) {
       const preview = { id: crypto.randomUUID(), kind, sourceId: id, signature: sourceState(source), owner: sender.documentId, windowId, expiresAt: Date.now() + 5 * 60_000 };
       const stored = await chrome.storage.session.get(KEY);
       await chrome.storage.session.set({ [KEY]: [preview, ...(stored[KEY] || []).filter((item) => item.owner !== sender.documentId && item.expiresAt > Date.now())].slice(0, 10) });
-      return { ok: true, previewId: preview.id, name: source.name || "恢复点", hasLayout: source.schemaVersion === 2, windowCount: source.windowCount || 1, pages: source.tabs.map((page, index) => ({ ...page, index, existing: urls.has(page.url) })) };
+      return { ok: true, previewId: preview.id, name: source.name || "恢复点", kind,
+        preset: normalizeRestorePreset(source.restorePreset, source.schemaVersion === 2),
+        hasLayout: source.schemaVersion === 2, windowCount: source.windowCount || 1, pages: source.tabs.map((page, index) => ({ ...page, index, existing: urls.has(page.url) })) };
       });
     },
     confirm(message, sender) {
@@ -270,7 +286,7 @@ export function createRestorer(markWorkspace) {
         await chrome.storage.session.set({ [KEY]: previews.filter((item) => item.id !== preview.id) });
         return { preview, source };
         });
-        return restore(preview.kind, source, message.indices, message.skipExisting !== false, preview.windowId, message.restoreLayout === true);
+        return restore(preview.kind, source, message.indices, message.skipExisting !== false, preview.windowId, message.restoreLayout === true, undefined, message);
       });
     },
     all(kind, id) {

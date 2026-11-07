@@ -1,6 +1,8 @@
 import { sanitizeSavedSnapshot, snapshotSignature } from "./session.js";
+import { workspaceMetadata } from "./workspace-metadata.js";
 
 export const BACKUP_LIMITS = Object.freeze({ bytes: 8 * 1024 * 1024, pagesPerSnapshot: 5000, totalPages: 50000, workspaces: 20, versions: 5 });
+const RECOMMENDED_PBKDF2_ITERATIONS = 310_000;
 const text = (value, limit = 80) => String(value || "").trim().slice(0, limit);
 const time = (value) => Number.isFinite(value) && value >= 0 ? value : 0;
 export function canonicalJSON(value) {
@@ -20,7 +22,7 @@ function normalizeWorkspace(source, warnings, depth = 0) {
   if (omitted) warnings.push(`「${text(source.name) || "工作区"}」已过滤 ${omitted} 个非网页或隐私页面。`);
   if ((source.versions?.length || 0) > BACKUP_LIMITS.versions) warnings.push(`「${text(source.name)}」历史版本仅保留最近 5 个。`);
   const normalized = {
-    ...snapshot, id: text(source.id, 120), name: text(source.name) || "导入的工作区",
+    ...snapshot, ...workspaceMetadata(source), id: text(source.id, 120), name: text(source.name) || "导入的工作区",
     createdAt: time(source.createdAt), updatedAt: time(source.updatedAt),
     pinned: Boolean(source.pinned), archived: Boolean(source.archived), archivedAt: time(source.archivedAt),
     lastOpenedAt: time(source.lastOpenedAt),
@@ -51,9 +53,9 @@ function counts(workspaces) {
 }
 export async function backupFingerprint(workspace) {
   const clean = normalizeWorkspace(workspace, []);
-  return backupHash({ name: clean.name, pinned: clean.pinned, archived: clean.archived,
+  return backupHash({ name: clean.name, pinned: clean.pinned, archived: clean.archived, ...workspaceMetadata(clean),
     snapshot: snapshotSignature(clean), versions: clean.versions.map(snapshotSignature),
-    sources: (clean.mergeSources || []).map((source) => ({ name: source.name, snapshot: snapshotSignature(source), versions: source.versions.map(snapshotSignature) })) });
+    sources: (clean.mergeSources || []).map((source) => ({ name: source.name, ...workspaceMetadata(source), snapshot: snapshotSignature(source), versions: source.versions.map(snapshotSignature) })) });
 }
 export async function createBackup({ settings = {}, workspaces = [] }) {
   const warnings = [];
@@ -77,7 +79,7 @@ async function encryptionKey(password, salt, iterations) {
   const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
   return crypto.subtle.deriveKey({ name: "PBKDF2", hash: "SHA-256", salt, iterations }, material, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
 }
-export async function createEncryptedBackup({ settings = {}, workspaces = [], password, iterations = 310_000 }) {
+export async function createEncryptedBackup({ settings = {}, workspaces = [], password, iterations = RECOMMENDED_PBKDF2_ITERATIONS }) {
   if (!Number.isInteger(iterations) || iterations < 10_000 || iterations > 1_000_000) throw new Error("加密参数无效。");
   const plain = await createBackup({ settings, workspaces });
   const salt = crypto.getRandomValues(new Uint8Array(16));
@@ -106,7 +108,9 @@ export async function readBackup(backup, password) {
   if (new TextEncoder().encode(JSON.stringify(backup)).byteLength > BACKUP_LIMITS.bytes) throw new Error("备份大小超过 8 MiB 上限。");
   if (backup.schemaVersion === 3) {
     const decoded = await readBackup(await decryptBackup(backup, password));
-    return { ...decoded, encrypted: true };
+    const needsReencryption = backup.encryption.iterations < RECOMMENDED_PBKDF2_ITERATIONS;
+    return { ...decoded, encrypted: true, needsReencryption,
+      warnings: needsReencryption ? [...decoded.warnings, "此加密备份使用较旧的密码派生参数，导入后请重新加密导出。"] : decoded.warnings };
   }
   const payload = backup.schemaVersion === 2 ? backup.payload : backup;
   if (!Array.isArray(payload?.workspaces)) throw new Error("备份工作区格式无效。");

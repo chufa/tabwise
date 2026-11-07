@@ -2,6 +2,7 @@ import { escapeHtml } from "../shared/html.js";
 import { OLLAMA_PROBE_SCHEMA, validateOllamaProbe } from "../shared/ollama.js";
 import { BACKUP_LIMITS } from "../shared/backup.js";
 import { SITE_RISK_TEMPLATES, applySiteRiskTemplate } from "../shared/policy.js";
+import { parseIdleRules } from "../shared/site-idle.js";
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -14,6 +15,7 @@ async function load() {
   $("#idle-minutes").value = settings.idleMinutes;
   $("#auto-suspend").checked = settings.autoSuspend;
   $("#budget-enabled").checked = settings.resourceBudgetEnabled;
+  $("#resource-sampling-mode").value = settings.resourceSampling ? settings.resourceSamplingMode || "normal" : "off";
   $("#budget-tabs").value = settings.resourceBudgetTabs;
   $("#budget-heap").value = settings.resourceBudgetHeapMB;
   $("#scheduled-review-enabled").checked = settings.scheduledReviewEnabled;
@@ -33,8 +35,33 @@ async function load() {
   $("#blocked-domains").value = settings.blockedDomains.join("\n");
   $("#manual-domains").value = (settings.manualDomains || []).join("\n");
   $("#native-discard-domains").value = (settings.nativeDiscardDomains || []).join("\n");
+  $("#site-idle-rules").value = (settings.siteIdleRules || []).map((rule) => `${rule.domain} ${rule.minutes}`).join("\n");
   await renderSyncHistory();
+  await renderBackupStatus();
 }
+
+async function renderBackupStatus() {
+  const status = await chrome.runtime.sendMessage({ type: "getBackupStatus" });
+  $("#backup-reminder-days").value = String(status.reminderDays || 0);
+  $("#backup-status").textContent = `${status.lastDownloadRequestedAt ? `最近发起下载：${new Date(status.lastDownloadRequestedAt).toLocaleString()}` : "尚未记录备份下载"}${status.due ? " · 已到提醒时间，请导出备份。" : ""}（请自行确认文件已保存）`;
+  $("#backup-history").innerHTML = (status.history || []).slice(0, 5).map((item) => `<p>${new Date(item.at).toLocaleString()} · ${item.kind === "download-requested" ? "发起下载" : item.ok ? item.verified ? "演练通过" : "旧备份演练通过（无校验码）" : "演练失败"} · ${item.counts.workspaces} 个工作区 · ${item.counts.pages} 页</p>`).join("");
+}
+$("#backup-reminder-days").addEventListener("change", async () => {
+  const result = await chrome.runtime.sendMessage({ type: "updateSettings", settings: { backupReminderDays: Number($("#backup-reminder-days").value) } });
+  if (result.ok === false) { $("#backup-feedback").textContent = result.reason; return; }
+  await renderBackupStatus();
+});
+$("#drill-backup").addEventListener("change", async (event) => {
+  const [file] = event.target.files;
+  if (!file) return;
+  try {
+    if (file.size > BACKUP_LIMITS.bytes) throw new Error("备份大小超过 8 MiB 上限。");
+    const result = await chrome.runtime.sendMessage({ type: "drillBackup", backup: JSON.parse(await file.text()), password: $("#backup-password").value });
+    if (!result.ok) throw new Error(result.reason);
+    $("#backup-feedback").textContent = `恢复演练通过：${result.counts.workspaces} 个工作区，${result.counts.pages} 页。未导入数据或打开网页。`;
+  } catch (error) { $("#backup-feedback").textContent = `演练失败：${error.message}`; }
+  finally { event.target.value = ""; await renderBackupStatus(); }
+});
 
 async function renderSyncHistory() {
   const history = await chrome.runtime.sendMessage({ type: "getSyncHistory" });
@@ -45,6 +72,9 @@ async function renderSyncHistory() {
 
 $("#settings-form").addEventListener("submit", async (event) => {
   event.preventDefault();
+  let siteIdleRules;
+  try { siteIdleRules = parseIdleRules($("#site-idle-rules").value); }
+  catch (error) { $("#saved").textContent = error.message; return; }
   const mode = document.querySelector('input[name="suspension-mode"]:checked').value;
   const strategy = document.querySelector('input[name="suspension-strategy"]:checked').value;
   const aiProvider = document.querySelector('input[name="ai-provider"]:checked').value;
@@ -60,12 +90,14 @@ $("#settings-form").addEventListener("submit", async (event) => {
     $("#saved").textContent = modeResult.reason;
     return;
   }
-  await chrome.runtime.sendMessage({
+  const savedResult = await chrome.runtime.sendMessage({
     type: "updateSettings",
     settings: {
       idleMinutes: Number($("#idle-minutes").value),
+      siteIdleRules,
       autoSuspend: $("#auto-suspend").checked,
       resourceBudgetEnabled: $("#budget-enabled").checked,
+      resourceSamplingMode: $("#resource-sampling-mode").value,
       resourceBudgetTabs: Number($("#budget-tabs").value),
       resourceBudgetHeapMB: Number($("#budget-heap").value),
       scheduledReviewEnabled: $("#scheduled-review-enabled").checked,
@@ -87,6 +119,7 @@ $("#settings-form").addEventListener("submit", async (event) => {
       nativeDiscardDomains: lines($("#native-discard-domains").value)
     }
   });
+  if (savedResult.ok === false) { $("#saved").textContent = savedResult.reason; return; }
   $("#saved").textContent = "已保存";
   setTimeout(() => { $("#saved").textContent = ""; }, 1600);
 });
@@ -97,19 +130,18 @@ $("#sync-metadata").addEventListener("click", async () => {
   try {
     const result = await chrome.runtime.sendMessage({ type: "previewSyncMetadata" });
     if (!result.ok) throw new Error(result.reason);
-    if (result.direction === "upload") {
-      const applied = await chrome.runtime.sendMessage({ type: "applySyncMetadata", resolutions: {} });
-      if (!applied.ok) throw new Error(applied.reason);
-      $("#sync-feedback").textContent = "已创建首个跨设备元数据副本。";
-    } else {
       const conflicts = result.conflicts || [];
-      $("#sync-preview").innerHTML = `<h3>同步预览</h3>${conflicts.length ? conflicts.map((item) => `<label class="sync-conflict">
+      $("#sync-preview").dataset.previewId = result.previewId;
+      $("#sync-preview").innerHTML = `<h3>同步预览</h3>
+        <p>选择本次云端副本中的工作区，未选内容保留在本机。同步仅包含当前快照、标签与站点策略；历史版本、合并来源和备注保留在本机。</p>
+        <p>${escapeHtml(result.capacity.reason || `当前本机快照约 ${result.capacity.bytes} 字节；上限 45 KB。`)}${result.pending ? " 上次同步未完成，请核对版本后再次确认。" : ""}</p>
+        <fieldset><legend>同步工作区</legend>${result.choices.map((item) => `<label class="check"><input type="checkbox" data-sync-workspace="${escapeHtml(item.id)}" checked><span>${escapeHtml(item.name)} · ${item.pages} 页</span></label>`).join("")}</fieldset>
+        ${conflicts.length ? conflicts.map((item) => `<label class="sync-conflict">
         <span><strong>${escapeHtml(item.kind === "workspace" ? item.name : item.key)}</strong><small>${item.kind === "workspace" ? "两台设备的工作区内容不同" : "两台设备的站点策略不同"}</small></span>
         <select data-sync-conflict="${escapeHtml(item.id)}"><option value="local">保留本机版本</option><option value="remote">采用同步版本</option>${item.kind === "workspace" ? '<option value="copy" selected>保留两个副本</option>' : ""}</select></label>`).join("") : "<p>没有冲突；确认后会合并新增元数据。</p>"}
         <div class="backup-actions"><button type="button" data-sync="apply">确认同步</button><button type="button" data-sync="cancel">取消</button></div>`;
       $("#sync-preview").hidden = false;
       $("#sync-feedback").textContent = "已生成同步预览，确认后才会写入。";
-    }
   } catch (error) { $("#sync-feedback").textContent = error.message; }
   finally { button.disabled = false; }
 });
@@ -118,7 +150,14 @@ $("#sync-preview").addEventListener("click", async (event) => {
   if (!action) return;
   if (action === "cancel") { $("#sync-preview").hidden = true; return; }
   const resolutions = Object.fromEntries([...document.querySelectorAll("[data-sync-conflict]")].map((input) => [input.dataset.syncConflict, input.value]));
-  const result = await chrome.runtime.sendMessage({ type: "applySyncMetadata", resolutions });
+  const button = event.target.closest("[data-sync]");
+  button.disabled = true;
+  let result;
+  try { result = await chrome.runtime.sendMessage({ type: "applySyncMetadata", resolutions,
+    previewId: $("#sync-preview").dataset.previewId,
+    workspaceIds: [...document.querySelectorAll("[data-sync-workspace]:checked")].map((input) => input.dataset.syncWorkspace) }); }
+  catch (error) { $("#sync-feedback").textContent = error.message; return; }
+  finally { button.disabled = false; }
   if (!result.ok) { $("#sync-feedback").textContent = result.reason; return; }
   $("#sync-preview").hidden = true;
   $("#sync-feedback").textContent = `已同步${result.conflicts ? `；已处理 ${result.conflicts} 个冲突` : ""}。`;
@@ -218,7 +257,10 @@ $("#export-backup").addEventListener("click", async () => {
   link.download = `tabwise-backup-${new Date().toISOString().slice(0, 10)}.json`;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-  $("#backup-feedback").textContent = `已导出 ${backup.integrity.counts.workspaces} 个工作区 · ${password ? "AES-GCM 加密与" : ""}SHA-256 校验码已附带`;
+  const recorded = await chrome.runtime.sendMessage({ type: "backupDownloadRequested", exportRequestId: backup.exportRequestId });
+  if (!recorded.ok) throw new Error(recorded.reason);
+  $("#backup-feedback").textContent = `已发起 ${backup.integrity.counts.workspaces} 个工作区的备份下载 · ${password ? "AES-GCM 加密与" : ""}SHA-256 校验码已附带，请确认文件已保存`;
+  await renderBackupStatus();
   } catch (error) { $("#backup-feedback").textContent = error.message; }
 });
 
@@ -265,7 +307,7 @@ $("#import-backup").addEventListener("change", async (event) => {
     if (!result.ok) throw new Error(result.reason);
     backupPreviewId = result.previewId;
     $("#backup-feedback").textContent = result.verified
-      ? result.encrypted ? "密码与完整性校验通过；恢复演练未写入任何数据，等待确认导入。" : "完整性校验通过，等待确认导入。"
+      ? result.encrypted ? `${result.needsReencryption ? "密码参数较旧；建议导入后重新加密导出。" : "密码与"}完整性校验通过；恢复演练未写入任何数据，等待确认导入。` : "完整性校验通过，等待确认导入。"
       : "旧版备份，请核对内容后导入。";
     $("#backup-preview").innerHTML = `<h3>导入预览</h3>
       <p>${result.counts.pages} 页 · ${result.counts.windows} 个窗口 · ${result.counts.versions} 个历史版本</p>

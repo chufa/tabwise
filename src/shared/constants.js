@@ -7,6 +7,9 @@ export const SUSPENDED_PAGE = "src/suspended/suspended.html";
 export const SCHEMA_VERSION = 1;
 export const DEFAULT_SETTINGS = Object.freeze({
   idleMinutes: 30,
+  siteIdleRules: [],
+  workspaceFilters: [],
+  backupReminderDays: 0,
   autoSuspend: false,
   suspensionMode: "conservative",
   suspensionStrategy: "placeholder",
@@ -20,6 +23,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   scheduledArchiveEnabled: false,
   scheduledArchiveDays: 30,
   resourceSampling: true,
+  resourceSamplingMode: "normal",
   resourceBudgetEnabled: false,
   resourceBudgetTabs: 50,
   resourceBudgetHeapMB: 1024,

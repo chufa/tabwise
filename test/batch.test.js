@@ -73,3 +73,16 @@ test("group effect evidence is durable before mutations and remains available af
   assert.equal(result.results[0].undoItems[0].after, "changed");
   assert.match(result.reason, /journal/);
 });
+test("concurrent retry reserves exactly one child and survives a restart without replay", async () => {
+  let tasks = [{ id: "parent", name: "Retry", kind: "suspend", status: "stopped", results: [{ ...items[0], status: "pending" }] }];
+  const settings = { read: async () => structuredClone(tasks), write: async (next) => { tasks = structuredClone(next); }, execute: async () => ({ ok: true }) };
+  const runner = createBatchRunner(settings);
+  const results = await Promise.allSettled([runner.retry("parent"), runner.retry("parent"), runner.retry("parent")]);
+  assert.equal(results.filter((item) => item.status === "fulfilled").length, 1);
+  assert.equal(tasks.filter((task) => task.retryOf === "parent").length, 1);
+  const child = tasks.find((task) => task.retryOf === "parent");
+  await runner.wait(child.id);
+  const restarted = createBatchRunner(settings);
+  await assert.rejects(restarted.retry("parent"), /重试/);
+  assert.equal((await restarted.detail("parent")).retryable, false);
+});

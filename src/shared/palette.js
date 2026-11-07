@@ -1,4 +1,4 @@
-import { escapeHtml } from "./html.js";
+import { escapeHtml, highlightMatch } from "./html.js";
 import { updateHTML } from "./live-ui.js";
 
 export function filterCommands(commands, query, limit = 12) {
@@ -18,7 +18,7 @@ export function createPalette({ feedback, refresh, restoreUI, batchUI, getDashbo
   const input = dialog.querySelector("input"), output = dialog.querySelector("#palette-results"), status = dialog.querySelector(".palette-status");
   let commands = [], visible = [], active = 0, generation = 0, request = 0, timer, returnFocus, restoreFocus = true;
   function draw() {
-    updateHTML(output, visible.map((item, index) => `<button type="button" role="option" id="palette-option-${index}" data-key="${escapeHtml(item.id)}" data-command="${index}" tabindex="-1" aria-selected="${index === active}"><strong>${escapeHtml(item.label)}</strong>${item.detail ? `<small>${escapeHtml(item.detail)}</small>` : ""}</button>`).join("") || "<p>没有匹配的命令或页面。</p>");
+    updateHTML(output, visible.map((item, index) => `<button type="button" role="option" id="palette-option-${index}" data-key="${escapeHtml(item.id)}" data-command="${index}" tabindex="-1" aria-selected="${index === active}"><strong>${highlightMatch(item.label, input.value)}</strong>${item.detail ? `<small>${highlightMatch(item.detail, input.value)}</small>` : ""}</button>`).join("") || "<p>没有匹配的命令或页面。</p>");
     if (visible.length) input.setAttribute("aria-activedescendant", `palette-option-${active}`); else input.removeAttribute("aria-activedescendant");
   }
   async function update() {
@@ -87,7 +87,7 @@ export function createPalette({ feedback, refresh, restoreUI, batchUI, getDashbo
         } },
         ...(undo ? [{ id: "undo", label: "撤销最近操作", detail: undo.label.split(" · ").slice(0, 2).join(" · "), keywords: "undo", run: () => send({ type: "undoOperation", operationId: undo.id }) }] : []),
         { id: "settings", label: "打开设置", keywords: "settings", run: () => chrome.runtime.openOptionsPage() },
-        ...workspaces.map((workspace) => ({ id: `workspace:${workspace.id}`, label: `恢复工作区 · ${workspace.name}`, detail: `${workspace.tabs.length} 页`, keywords: "restore", run: () => restoreUI.open("workspace", workspace.id) })),
+        ...[...workspaces].sort((a, b) => Number(Boolean(b.favorite)) - Number(Boolean(a.favorite))).map((workspace) => ({ id: `workspace:${workspace.id}`, label: `${workspace.favorite ? "★ " : ""}恢复工作区 · ${workspace.name}`, detail: `${workspace.tabs.length} 页`, keywords: `restore ${(workspace.tags || []).join(" ")}`, run: () => restoreUI.open("workspace", workspace.id) })),
         ...(dashboard?.organization.domainGroups || []).slice(0, 12).map((group) => ({ id: `group:${group.domain}`, label: `分组预览 · ${group.domain}`, detail: `${group.tabIds.length} 页`, keywords: "group batch", run: () => batchUI.open("group", { title: group.domain, tabIds: group.tabIds }) }))
       ];
       status.textContent = ""; await update();

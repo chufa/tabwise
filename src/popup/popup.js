@@ -84,7 +84,7 @@ function actionMessage(reason) {
   return labels[reason] || reason || "操作未完成";
 }
 
-function row({ title, subtitle, action = "", secondaryAction = "", tertiaryAction = "", id = "", badge = "", tabIds = [] }) {
+function row({ title, subtitle, action = "", secondaryAction = "", tertiaryAction = "", additionalAction = "", id = "", badge = "", tabIds = [] }) {
   const tabData = tabIds.length ? ` data-tab-ids="${escapeHtml(JSON.stringify(tabIds))}"` : "";
   const actionId = action?.id || id;
   const secondaryActionId = secondaryAction?.id || id;
@@ -92,7 +92,7 @@ function row({ title, subtitle, action = "", secondaryAction = "", tertiaryActio
   return `<div class="row" data-key="${escapeHtml(`${action?.type || ""}:${id}`)}">
     <div class="row-main"><strong title="${escapeHtml(title)}">${escapeHtml(title)}</strong><span title="${escapeHtml(subtitle)}">${escapeHtml(subtitle)}</span></div>
     ${badge ? `<span class="status-badge ${badge === "休眠中" ? "resting" : ""}">${escapeHtml(badge)}</span>` : ""}
-    ${action || secondaryAction || tertiaryAction ? `<div class="row-actions">${tertiaryAction ? `<button class="action-button" data-action="${tertiaryAction.type}" data-id="${escapeHtml(tertiaryActionId)}" type="button">${escapeHtml(tertiaryAction.label)}</button>` : ""}${secondaryAction ? `<button class="action-button" data-action="${secondaryAction.type}" data-id="${escapeHtml(secondaryActionId)}" type="button">${escapeHtml(secondaryAction.label)}</button>` : ""}${action ? `<button class="action-button" data-action="${action.type}" data-id="${escapeHtml(actionId)}"${tabData} type="button">${escapeHtml(action.label)}</button>` : ""}</div>` : ""}
+    ${action || secondaryAction || tertiaryAction || additionalAction ? `<div class="row-actions">${additionalAction ? `<button class="action-button" data-action="${additionalAction.type}" data-id="${escapeHtml(id)}" type="button">${escapeHtml(additionalAction.label)}</button>` : ""}${tertiaryAction ? `<button class="action-button" data-action="${tertiaryAction.type}" data-id="${escapeHtml(tertiaryActionId)}" type="button">${escapeHtml(tertiaryAction.label)}</button>` : ""}${secondaryAction ? `<button class="action-button" data-action="${secondaryAction.type}" data-id="${escapeHtml(secondaryActionId)}" type="button">${escapeHtml(secondaryAction.label)}</button>` : ""}${action ? `<button class="action-button" data-action="${action.type}" data-id="${escapeHtml(actionId)}"${tabData} type="button">${escapeHtml(action.label)}</button>` : ""}</div>` : ""}
   </div>`;
 }
 
@@ -169,12 +169,16 @@ function renderTabs() {
   updateHTML($("#tabs"), visible.map((tab) => {
     const isProtected = !tab.suspended && tab.status === "protected";
     const canTrust = isProtected && /^https?:/.test(tab.url) && tab.reason === "Untrusted domain";
-    const canDirectSuspend = isProtected && /^https?:/.test(tab.url) && !["Active tab", "Still loading", "Already discarded by browser"].includes(tab.reason);
+    const canDirectSuspend = isProtected && !tab.temporarilyProtected && /^https?:/.test(tab.url) && !["Active tab", "Still loading", "Already discarded by browser"].includes(tab.reason);
     const action = tab.suspended
       ? { type: "restore", label: "恢复" }
       : tab.status === "live" ? { type: "suspend", label: "休眠" }
         : canDirectSuspend ? { type: "direct-suspend", label: "直接休眠" } : null;
-    const secondaryAction = canTrust ? { type: "trust", label: "信任网站" } : null;
+    const canProtect = !tab.suspended && !tab.incognito && /^https?:/.test(tab.url);
+    const secondaryAction = tab.temporarilyProtected ? { type: "unprotect", label: "解除临时保护" }
+      : canTrust ? { type: "trust", label: "信任网站" } : canProtect ? { type: "protect-hour", label: "保护 1 小时" } : null;
+    const tertiaryAction = canProtect && !tab.temporarilyProtected ? { type: "protect-session", label: "会话保护" } : null;
+    const additionalAction = canProtect && canTrust && !tab.temporarilyProtected ? { type: "protect-hour", label: "保护 1 小时" } : null;
     const memory = memoryLabel(tab.memory);
     const subtitle = tab.suspended
       ? `已休眠 ${formatDuration(tab.suspendedAt)} · 已观察 ${formatDuration(tab.observedAt)}`
@@ -186,6 +190,8 @@ function renderTabs() {
       subtitle: rowMessage ? `${subtitle} · ${rowMessage}` : subtitle,
       action,
       secondaryAction,
+      tertiaryAction,
+      additionalAction,
       id: tab.suspended ? (tab.recordId || tab.id) : tab.id,
       badge: tab.suspended ? "休眠中" : isProtected ? "已保护" : ""
     });
@@ -281,6 +287,8 @@ document.body.addEventListener("click", async (event) => {
       : await send({ type: "restoreRecord", recordId: id });
   }
   if (action === "trust") result = await send({ type: "trustDomain", url: state.data.tabs.find((tab) => tab.id === Number(id))?.url });
+  if (action === "protect-hour" || action === "protect-session") result = await send({ type: "protectTab", tabId: Number(id), duration: action === "protect-hour" ? "hour" : "session" });
+  if (action === "unprotect") result = await send({ type: "unprotectTab", tabId: Number(id) });
   if (action === "focus-tab") result = await send({ type: "focusTab", tabId: Number(id) });
   if (action === "restore-recent") result = await send({ type: "restoreRecentSuspension", recordId: id });
   if (action === "restore-checkpoint") {

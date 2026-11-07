@@ -3,10 +3,15 @@ import { sourceState } from "./restoration.js";
 import { updateHTML } from "./live-ui.js";
 import { pageStatus, taskCounts, restoreStatus } from "./task-ui.js";
 import { createPagedList } from "./paged-ui.js";
+import { filterWorkspaces } from "./workspace-metadata.js";
+import { restoreTagIndices } from "./workspace-presets.js";
+import { createOrganizationUI } from "./organization-ui.js";
+import { highlightMatch } from "./html.js";
 
 const send = (message) => chrome.runtime.sendMessage(message);
-const memberBody = (page) => `<span><strong>${escapeHtml(page.title || page.url)}</strong>
-  <small>${escapeHtml(page.url)} · 窗口 ${(page.windowKey ?? 0) + 1}${page.pinned ? " · 固定" : ""}${page.status === "suspended" ? " · 休眠" : ""}${page.existing ? " · 已打开（将跳过）" : ""}</small></span>`;
+const memberBody = (page, query = "") => `<span><strong>${highlightMatch(page.title || page.url, query)}</strong>
+  <small>${highlightMatch(page.url, query)} · 窗口 ${(page.windowKey ?? 0) + 1}${page.pinned ? " · 固定" : ""}${page.status === "suspended" ? " · 休眠" : ""}${page.existing ? " · 已打开（将跳过）" : ""}</small>
+  ${page.tags?.length ? `<small>标签：${highlightMatch(page.tags.join(" · "), query)}</small>` : ""}</span>`;
 
 export function createRestoreUI(host, feedback, refresh) {
   let preview;
@@ -19,7 +24,10 @@ export function createRestoreUI(host, feedback, refresh) {
     host.querySelector("[data-restore=confirm]").disabled = selected.length === 0;
     host.querySelector(".selection-count").textContent = `已选 ${selected.length} / ${preview.pages.length} 页`;
   };
-  host.addEventListener("change", count);
+  host.addEventListener("change", (event) => {
+    if (preview && event.target.matches(".restore-tag")) members.setValues(restoreTagIndices(preview.pages, event.target.value));
+    count();
+  });
   host.addEventListener("click", async (event) => {
     const button = event.target.closest("[data-restore]");
     if (!button) return;
@@ -35,10 +43,13 @@ export function createRestoreUI(host, feedback, refresh) {
     const indices = members.values();
     const skipExisting = host.querySelector(".skip-existing").checked;
     const restoreLayout = host.querySelector(".restore-layout")?.checked || false;
-    host.querySelectorAll("button, input").forEach((input) => { input.disabled = true; });
+    const loadMode = host.querySelector(".restore-load-mode").value;
+    const concurrency = Number(host.querySelector(".restore-concurrency").value);
+    host.querySelectorAll("button, input, select").forEach((input) => { input.disabled = true; });
     host.querySelector(".restore-result").textContent = "正在分批恢复所选页面…";
     try {
-      const result = await send({ type: "startRestore", previewId: preview.previewId, indices, skipExisting, restoreLayout });
+      const result = await send({ type: "startRestore", previewId: preview.previewId, indices, skipExisting, restoreLayout, loadMode, concurrency,
+        tag: host.querySelector(".restore-tag").value, rememberPreset: host.querySelector(".remember-preset")?.checked || false });
       if (version !== current) return;
       if (!result?.ok) throw new Error(result?.reason || "恢复未完成，请重新预览。");
       preview = null;
@@ -82,15 +93,29 @@ export function createRestoreUI(host, feedback, refresh) {
         <p class="saved-hint">已选页面会分批恢复，每批最多 5 页；当前标签保持打开。</p>
         <p class="saved-hint">共 ${result.pages.length} 页${alreadyOpen ? ` · ${alreadyOpen} 页已打开，默认跳过` : ""}${suspended ? ` · ${suspended} 页将保持休眠` : ""}${result.hasLayout ? ` · 目标 ${result.windowCount} 个窗口` : ""}。</p>
         <div class="saved-actions"><button type="button" data-restore="all">全选</button><button type="button" data-restore="none">全不选</button><span class="selection-count"></span></div>
+        <label class="saved-switch">页面标签<select class="restore-tag"><option value="">全部页面</option>${[...new Set(result.pages.flatMap((page) => page.tags || []))].map((tag) => `<option value="${escapeHtml(tag)}">${escapeHtml(tag)}</option>`).join("")}</select></label>
         <fieldset class="saved-members"><legend>要恢复的页面</legend><div class="restore-page-list"></div></fieldset>
         <label class="saved-switch"><input class="skip-existing" type="checkbox" checked>跳过已打开的页面（所有窗口）</label>
+        <label class="saved-switch">加载方式<select class="restore-load-mode"><option value="eager">分批加载网页</option><option value="on-demand">先建立休眠页，点击再加载</option></select></label>
+        <label class="saved-switch">每批页数<select class="restore-concurrency">${[1, 2, 3, 4, 5].map((n) => `<option value="${n}" ${n === 5 ? "selected" : ""}>${n}</option>`).join("")}</select></label>
+        <p class="saved-hint">按需恢复不会请求原网站；恢复的是网址和布局，不包含未保存的网页内容。</p>
+        ${kind === "workspace" ? '<label class="saved-switch"><input class="remember-preset" type="checkbox" checked>记住此工作区的恢复方式</label>' : ""}
         ${result.hasLayout ? `<label class="saved-switch"><input class="restore-layout" type="checkbox" checked>新建窗口恢复布局（仅新打开的页面）</label>
-        <p class="saved-hint">快照含 ${result.windowCount} 个窗口、固定页和标签组。休眠页保持休眠；取消布局恢复后，网页会在当前窗口加载。</p>` : ""}
+        <p class="saved-hint">快照含 ${result.windowCount} 个窗口、固定页和标签组。勾选布局时保留原休眠状态；取消后使用当前窗口，加载方式由上方选择决定。</p>` : ""}
         <div class="saved-actions"><button type="button" data-restore="confirm">恢复所选页面</button><button type="button" data-restore="cancel">取消</button></div>
         <div class="restore-result" role="status"></div>`;
       host.hidden = false;
       members = createPagedList(host.querySelector(".restore-page-list"), { selected: true, render: memberBody, onChange: count });
       members.setData(result.pages.map((page, index) => ({ ...page, index })));
+      const preset = result.preset;
+      host.querySelector(".restore-load-mode").value = preset.loadMode;
+      host.querySelector(".restore-concurrency").value = preset.concurrency;
+      host.querySelector(".skip-existing").checked = preset.skipExisting;
+      if (host.querySelector(".restore-layout")) host.querySelector(".restore-layout").checked = preset.restoreLayout;
+      if ([...host.querySelector(".restore-tag").options].some((option) => option.value === preset.tag)) {
+        host.querySelector(".restore-tag").value = preset.tag;
+        members.setValues(restoreTagIndices(result.pages, preset.tag));
+      }
       if (options.indices) members.setValues(options.indices);
       count();
       host.scrollIntoView({ block: "nearest", behavior: "instant" });
@@ -100,14 +125,28 @@ export function createRestoreUI(host, feedback, refresh) {
 }
 
 export function createWorkspaceUI(host, restoreUI, feedback, refresh) {
+  const organizationUI = createOrganizationUI(feedback, refresh);
   let workspaces = [];
   let trash = [];
   let filter = "";
+  let externalFilter = "";
   let busy = 0;
   let bindings = {};
   let editorMembers;
+  let pageTags = {};
+  let savedFilters = [];
+  let facets = { tag: "", status: "all", favorite: false };
   const selected = new Set();
-  host.innerHTML = `<div class="workspace-list"></div>
+  host.innerHTML = `<div class="workspace-filters saved-actions">
+    <input class="ws-query" type="search" maxlength="200" aria-label="搜索工作区" placeholder="搜索名称、标签或备注">
+    <label>标签<select class="ws-tag"><option value="">全部标签</option></select></label>
+    <label>状态<select class="ws-status"><option value="all">全部状态</option><option value="active">未归档</option><option value="archived">已归档</option></select></label>
+    <label><input class="ws-favorite" type="checkbox">仅收藏</label>
+    <label>已保存筛选<select class="ws-saved-filter"><option value="">选择筛选</option></select></label>
+    <input class="ws-filter-name" maxlength="40" aria-label="筛选名称" placeholder="筛选名称">
+    <button type="button" data-filter="save">保存筛选</button><button type="button" data-filter="delete">删除筛选</button>
+    <button type="button" data-organize-duplicates>合并当前窗口重复页</button>
+    </div><div class="workspace-favorites saved-actions" aria-label="收藏工作区快捷入口"></div><div class="workspace-list"></div>
     <form class="merge-workspaces" hidden><label>合并后的名称<input name="merge-name" maxlength="80" required placeholder="新工作区名称"></label>
     <p class="saved-hint">合并所选工作区；布局快照保留窗口和重复页面，原工作区保留。</p><button type="submit">合并所选工作区</button></form>
     <div class="workspace-editor" hidden></div>
@@ -115,12 +154,20 @@ export function createWorkspaceUI(host, restoreUI, feedback, refresh) {
   const draw = () => {
     if (busy) return;
     for (const id of selected) if (!workspaces.some((item) => item.id === id)) selected.delete(id);
-    const visible = workspaces.filter((item) => !filter || `${item.name} ${item.tabs.map((tab) => `${tab.title} ${tab.url}`).join(" ")}`.toLowerCase().includes(filter));
+    const visible = filterWorkspaces(workspaces, { ...facets, query: filter });
+    updateHTML(host.querySelector(".workspace-favorites"), workspaces.filter((workspace) => workspace.favorite).map((workspace) =>
+      `<span data-id="${escapeHtml(workspace.id)}"><button type="button" data-ws="open">★ ${escapeHtml(workspace.name)}</button></span>`).join(""));
+    updateHTML(host.querySelector(".ws-tag"), `<option value="">全部标签</option>${[...new Set(workspaces.flatMap((item) => item.tags || []))].map((tag) => `<option value="${escapeHtml(tag)}">${escapeHtml(tag)}</option>`).join("")}`);
+    host.querySelector(".ws-tag").value = facets.tag;
+    updateHTML(host.querySelector(".ws-saved-filter"), `<option value="">选择筛选</option>${savedFilters.map((item, i) => `<option value="${i}">${escapeHtml(item.name)}</option>`).join("")}`);
     updateHTML(host.querySelector(".workspace-list"), visible.map((workspace) => `<article class="saved-workspace" data-key="${escapeHtml(workspace.id)}">
       <div class="saved-workspace-heading"><input type="checkbox" data-ws-select="${escapeHtml(workspace.id)}" aria-label="选择 ${escapeHtml(workspace.name)}" ${selected.has(workspace.id) ? "checked" : ""}>
-      <div><strong>${escapeHtml(workspace.name)}</strong><small>${workspace.tabs.length} 页 · ${workspace.archived ? "已归档" : workspace.pinned ? "已固定" : "已保存"}${workspace.lastOpenedAt ? ` · 打开于 ${new Date(workspace.lastOpenedAt).toLocaleDateString()}` : ""}${Object.entries(bindings).filter(([, id]) => id === workspace.id).map(([id]) => ` · 关联窗口 ${id}`).join("")}</small></div></div>
+      <div><strong>${workspace.favorite ? "★ " : ""}${highlightMatch(workspace.name, filter)}</strong><small>${workspace.tabs.length} 页 · ${workspace.archived ? "已归档" : workspace.pinned ? "已固定" : "已保存"}${workspace.lastOpenedAt ? ` · 打开于 ${new Date(workspace.lastOpenedAt).toLocaleDateString()}` : ""}${Object.entries(bindings).filter(([, id]) => id === workspace.id).map(([id]) => ` · 关联窗口 ${id}`).join("")}</small>
+      ${(workspace.tags || []).length ? `<small>${escapeHtml(workspace.tags.join(" · "))}</small>` : ""}
+      ${workspace.notes ? `<small class="workspace-notes">${highlightMatch(workspace.notes, filter)}</small>` : ""}</div></div>
       <div class="saved-actions" data-id="${escapeHtml(workspace.id)}">
         <button type="button" data-ws="open">选择恢复</button><button type="button" data-ws="edit">编辑</button>
+        <button type="button" data-ws="links">检测链接</button>
         <button type="button" data-ws="bind">关联当前窗口</button><button type="button" data-ws="update">更新预览</button><button type="button" data-ws="versions">历史版本</button>
         <button type="button" data-ws="pin">${workspace.pinned ? "取消固定" : "固定"}</button>
         <button type="button" data-ws="archive">${workspace.archived ? "取消归档" : "归档"}</button>
@@ -133,10 +180,29 @@ export function createWorkspaceUI(host, restoreUI, feedback, refresh) {
       <div class="saved-actions" data-id="${escapeHtml(workspace.id)}"><button type="button" data-ws="restore-trash">恢复工作区</button><button type="button" data-ws="delete">永久删除</button></div></article>`).join("") || '<p class="saved-hint">回收站为空。</p>');
   };
   host.addEventListener("change", (event) => {
+    if (event.target.matches(".ws-tag, .ws-status, .ws-favorite")) {
+      facets = { tag: host.querySelector(".ws-tag").value, status: host.querySelector(".ws-status").value, favorite: host.querySelector(".ws-favorite").checked };
+      draw(); return;
+    }
+    if (event.target.matches(".ws-saved-filter")) {
+      const saved = savedFilters[event.target.value];
+      if (saved) {
+        filter = saved.query; facets = { tag: saved.tag, status: saved.status, favorite: saved.favorite };
+        host.querySelector(".ws-query").value = filter;
+        host.querySelector(".ws-status").value = saved.status; host.querySelector(".ws-favorite").checked = saved.favorite;
+        host.querySelector(".ws-filter-name").value = saved.name;
+        draw();
+      }
+      return;
+    }
     const id = event.target.dataset.wsSelect;
     if (!id) return;
     if (event.target.checked) selected.add(id); else selected.delete(id);
     host.querySelector(".merge-workspaces").hidden = selected.size < 2;
+  });
+  host.addEventListener("input", (event) => {
+    if (event.target.matches(".ws-query")) { filter = event.target.value.trim(); draw(); }
+    if (event.target.matches("[data-page-tags]")) pageTags[event.target.dataset.pageTags] = event.target.value.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean);
   });
   const finish = async (result) => {
     if (!result?.ok) throw new Error(result?.reason || "操作未完成。");
@@ -144,6 +210,22 @@ export function createWorkspaceUI(host, restoreUI, feedback, refresh) {
     await refresh();
   };
   host.addEventListener("click", async (event) => {
+    if (event.target.closest("[data-organize-duplicates]")) {
+      try { await organizationUI.duplicates(); } catch (error) { feedback(error.message, true); }
+      return;
+    }
+    const filterAction = event.target.closest("[data-filter]")?.dataset.filter;
+    if (filterAction) {
+      try {
+        const name = host.querySelector(".ws-filter-name").value.trim();
+        const next = savedFilters.filter((item) => item.name !== name);
+        if (filterAction === "save") next.push({ name, query: filter, ...facets });
+        const result = await send({ type: "saveWorkspaceFilters", filters: next });
+        if (!result.ok) throw new Error(result.reason);
+        savedFilters = next; draw(); feedback("筛选条件已更新");
+      } catch (error) { feedback(error.message, true); }
+      return;
+    }
     const button = event.target.closest("[data-ws]");
     if (!button) return;
     const action = button.dataset.ws;
@@ -156,6 +238,7 @@ export function createWorkspaceUI(host, restoreUI, feedback, refresh) {
     button.disabled = true;
     try {
       if (action === "open") { await restoreUI.open("workspace", id); return; }
+      if (action === "links") { await organizationUI.links(id); return; }
       if (action === "bind") { await finish(await send({ type: "bindWorkspace", workspaceId: id })); return; }
       if (action === "confirm-update") {
         await finish(await send({ type: "confirmWorkspaceUpdate", previewId: button.dataset.previewId }));
@@ -183,12 +266,17 @@ export function createWorkspaceUI(host, restoreUI, feedback, refresh) {
         return;
       }
       if (action === "edit") {
+        pageTags = Object.fromEntries(workspace.tabs.map((page, index) => [index, page.tags || []]));
         editor.innerHTML = `<form data-id="${escapeHtml(id)}" data-signature="${escapeHtml(sourceState(workspace))}">
           <h3>编辑工作区</h3><label>工作区名称<input name="workspace-name" value="${escapeHtml(workspace.name)}" maxlength="80" required></label>
+          <label>标签（逗号分隔，最多 12 个）<input name="workspace-tags" value="${escapeHtml((workspace.tags || []).join(", "))}" maxlength="400"></label>
+          <label>备注（仅本机，最多 2000 字）<textarea name="workspace-notes" maxlength="2000" rows="3">${escapeHtml(workspace.notes || "")}</textarea></label>
+          <label class="saved-switch"><input name="workspace-favorite" type="checkbox" ${workspace.favorite ? "checked" : ""}>收藏为常用工作区</label>
           <fieldset class="saved-members"><legend>保留的页面</legend><div class="editor-page-list"></div></fieldset>
           <div class="saved-actions"><button type="submit">保存修改</button><button type="button" data-ws="cancel-edit">取消</button></div><p class="editor-feedback" role="status"></p></form>`;
         editor.hidden = false;
-        editorMembers = createPagedList(editor.querySelector(".editor-page-list"), { selected: true });
+        editorMembers = createPagedList(editor.querySelector(".editor-page-list"), { selected: true,
+          render: (page, query) => `${memberBody(page, query)}<input type="text" data-page-tags="${page.index}" value="${escapeHtml(pageTags[page.index].join(", "))}" maxlength="400" aria-label="页面 ${page.index + 1} 标签" placeholder="页面标签（逗号分隔）">` });
         editorMembers.setData(workspace.tabs.map((page, index) => ({ ...page, index })));
         editor.scrollIntoView({ block: "nearest", behavior: "instant" });
         editor.querySelector("input").focus({ preventScroll: true });
@@ -213,6 +301,8 @@ export function createWorkspaceUI(host, restoreUI, feedback, refresh) {
         selected.clear(); form.reset(); draw();
       } else {
         await finish(await send({ type: "editWorkspace", workspaceId: form.dataset.id, signature: form.dataset.signature, name: form.elements["workspace-name"].value,
+          metadata: { tags: form.elements["workspace-tags"].value.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean),
+            notes: form.elements["workspace-notes"].value, favorite: form.elements["workspace-favorite"].checked, pageTags },
           indices: editorMembers.values() }));
         host.querySelector(".workspace-editor").hidden = true;
       }
@@ -221,8 +311,13 @@ export function createWorkspaceUI(host, restoreUI, feedback, refresh) {
       feedback(error.message, true);
     } finally { busy--; buttons.forEach((button) => { button.disabled = false; }); draw(); }
   });
+  send({ type: "getWorkspaceFilters" }).then((values) => { if (Array.isArray(values)) { savedFilters = values; draw(); } }).catch(() => {});
   return {
     setData(next, nextTrash, nextBindings = {}) { workspaces = next; trash = nextTrash; bindings = nextBindings; draw(); },
-    setFilter(value) { filter = value.trim().toLowerCase(); draw(); }
+    setFilter(value) {
+      if (value === externalFilter) return;
+      externalFilter = value; filter = value.trim();
+      host.querySelector(".ws-query").value = filter; draw();
+    }
   };
 }

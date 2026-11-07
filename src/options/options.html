@@ -58,6 +58,8 @@
         <section class="setting-group">
           <h2>资源预算</h2>
           <label class="switch-row" for="budget-enabled"><span><strong>启用预算提醒</strong><small>超出预算时显示回收建议，确认后才会休眠。仅选择已闲置且网页保护检查通过的页面。</small></span><input id="budget-enabled" type="checkbox"></label>
+          <label class="field-label" for="resource-sampling-mode"><span>后台内存采样</span><select id="resource-sampling-mode"><option value="off">关闭</option><option value="low">低频省电</option><option value="normal">普通</option></select></label>
+          <p>采样按页面数量与界面活动调整频率，关闭后仍可手动测量。后台最多并发测量 4 页。</p>
           <label class="field-label" for="budget-tabs"><span>已加载网页数量</span><input id="budget-tabs" type="number" min="1" max="1000" required></label>
           <label class="field-label" for="budget-heap"><span>已采样 JS 堆预算（MB）</span><input id="budget-heap" type="number" min="64" max="65536" required></label>
           <p class="section-copy">JS 堆仅计入最近 5 分钟的采样，不代表浏览器物理内存。持续增长提示要求同一页面连续 3 次增长、累计至少 64 MB。使用智能保护模式可获得安全回收候选。</p>
@@ -121,13 +123,15 @@
           <p class="section-copy">“仅手动”阻止自动休眠但允许你主动操作；“仅原生卸载”在该站使用 Chrome 原生卸载，切回时会自动加载。</p>
           <label class="field-label" for="manual-domains"><span>仅手动管理</span><textarea id="manual-domains" rows="3" spellcheck="false" placeholder="docs.example.com"></textarea></label>
           <label class="field-label" for="native-discard-domains"><span>仅原生卸载</span><textarea id="native-discard-domains" rows="3" spellcheck="false" placeholder="news.example.com"></textarea></label>
+          <label class="field-label" for="site-idle-rules"><span>站点闲置时长（域名 分钟，每行一项）</span><textarea id="site-idle-rules" rows="4" spellcheck="false" placeholder="docs.example.com 120&#10;news.example.com 15"></textarea></label>
+          <p class="section-copy">5–1440 分钟，最多 100 项；子域名的具体规则优先。不改变可信网站和网页保护条件。</p>
           <label class="field-label" for="site-template"><span>站点风险模板</span><select id="site-template"></select></label>
           <label class="field-label" for="template-domains"><span>模板域名（可选，每行一个）</span><textarea id="template-domains" rows="3" spellcheck="false" placeholder="留空使用建议域名"></textarea></label>
           <div class="backup-actions"><button id="apply-site-template" type="button">预览并填入模板</button><span id="template-feedback" role="status"></span></div>
         </section>
         <section class="setting-group">
           <h2>跨设备元数据</h2>
-          <p class="section-copy">同步工作区和站点策略，不同步当前会话、休眠恢复记录、最近关闭、AI 缓存或诊断。冲突会保留为同步副本。</p>
+          <p class="section-copy">选择同步工作区当前快照、页面标签、恢复预设、收藏状态和四类站点列表。内容上限 45 KB；历史版本、合并来源、备注、筛选、站点闲置时长、当前会话、休眠恢复记录、最近关闭、AI 缓存及诊断留在本机。冲突可保留为同步副本。</p>
           <div class="backup-actions"><button id="sync-metadata" type="button">同步工作区和策略</button><span id="sync-feedback" role="status"></span></div>
           <div id="sync-preview" hidden></div>
           <div id="sync-history" class="sync-history" aria-live="polite"></div>
@@ -136,7 +140,7 @@
       </form>
       <section class="privacy-note">
         <h2>本地优先</h2>
-        <p>设置、工作区快照和休眠记录仅保存在浏览器本地。TabWise 不上传页面正文、Cookie、表单内容或完整网址，也不会在未明确开启前调用外部大模型。</p>
+        <p>默认将设置、工作区快照和休眠记录保存在浏览器本地。主动同步会将工作区网址、标签和站点列表写入浏览器同步存储；备注留在本机。模型输入不包含完整网址、页面正文、Cookie 或表单内容。</p>
         <div class="backup-actions"><button id="clear-local-history" class="secondary" type="button">清除本地历史</button><span id="history-feedback" role="status"></span></div>
       </section>
       <section class="privacy-note" aria-labelledby="reliability-title">
@@ -146,14 +150,18 @@
       </section>
       <section class="backup-note">
         <h2>本地备份</h2>
-        <p>备份包含设置、工作区布局和最近 5 个历史版本。可输入至少 12 位密码生成 AES-GCM 加密备份；密码不保存在扩展中。导入预览即恢复演练，不会写入数据。大小上限 8 MiB，单个快照最多 5000 页。</p>
+        <p>备份包含设置、工作区布局、标签、备注、筛选和最近 5 个历史版本。可输入至少 12 位密码生成 AES-GCM 加密备份；密码不保存在扩展中。导入预览不会写入数据；恢复演练仅记录校验结果，不导入或打开网页。大小上限 8 MiB，单个快照最多 5000 页。</p>
+        <label class="field-label" for="backup-reminder-days"><span>备份提醒间隔</span><select id="backup-reminder-days"><option value="0">关闭提醒</option><option value="7">7 天</option><option value="30">30 天</option><option value="90">90 天</option></select></label>
+        <p id="backup-status" role="status"></p>
         <label class="field-label" for="backup-password"><span>备份密码（可选）</span><input id="backup-password" type="password" minlength="12" autocomplete="new-password" placeholder="至少 12 位；导入加密备份时必填"></label>
         <div class="backup-actions">
           <button id="export-backup" type="button">导出工作区备份</button>
           <label class="import-button" for="import-backup">导入备份<input id="import-backup" type="file" accept="application/json,.json"></label>
+          <label class="import-button" for="drill-backup">恢复演练<input id="drill-backup" type="file" accept="application/json,.json"></label>
           <span id="backup-feedback" role="status"></span>
         </div>
         <div id="backup-preview" hidden></div>
+        <div id="backup-history" aria-live="polite"></div>
       </section>
     </main>
     <script type="module" src="options.js"></script>

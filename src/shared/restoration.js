@@ -1,6 +1,15 @@
+import { workspaceMetadata } from "./workspace-metadata.js";
+
+export const restoreLoadOptions = (options = {}) => ({
+  loadMode: options.loadMode === "on-demand" ? "on-demand" : "eager",
+  concurrency: Number.isInteger(options.concurrency) ? Math.max(1, Math.min(5, options.concurrency)) : 5
+});
+
 export function sourceState(source) {
-  // Access timestamps don't change the saved content being reviewed.
-  const value = { id: source.id, name: source.name || "", deletedAt: source.deletedAt || 0,
+  // Opening a workspace changes access/archive state, not its reviewed content.
+  const { restorePreset, ...metadata } = workspaceMetadata(source);
+  const value = { id: source.id, name: source.name || "", ...metadata,
+    deletedAt: source.deletedAt || 0,
     schemaVersion: source.schemaVersion || 1, windowCount: source.windowCount || 1, tabs: source.tabs, groups: source.groups || [] };
   const canonical = (item) => Array.isArray(item) ? item.map(canonical)
     : item && typeof item === "object" ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, canonical(item[key])])) : item;
