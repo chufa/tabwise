@@ -1,5 +1,6 @@
 import { escapeHtml, highlightMatch } from "./html.js";
 import { updateHTML } from "./live-ui.js";
+import { revealElement } from "./navigation.js";
 
 export function filterCommands(commands, query, limit = 12) {
   const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -55,7 +56,12 @@ export function createPalette({ feedback, refresh, restoreUI, batchUI, getDashbo
   }
   dialog.addEventListener("close", close);
   dialog.querySelector("[data-palette-close]").addEventListener("click", () => dialog.close());
-  input.addEventListener("input", () => { request++; clearTimeout(timer); timer = setTimeout(update, 120); });
+  input.addEventListener("input", () => {
+    request++; clearTimeout(timer);
+    // Immediately remove stale commands before Enter can execute an earlier query.
+    visible = filterCommands(commands, input.value); active = 0; draw();
+    timer = setTimeout(update, 120);
+  });
   dialog.addEventListener("keydown", (event) => {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault(); active = visible.length ? (active + (event.key === "ArrowDown" ? 1 : -1) + visible.length) % visible.length : 0;
@@ -78,11 +84,12 @@ export function createPalette({ feedback, refresh, restoreUI, batchUI, getDashbo
       const undo = operations.find((entry) => entry.status === "ready");
       commands = [
         { id: "checkpoint", label: "保存恢复点", keywords: "checkpoint save", run: () => send({ type: "createRecoveryCheckpoint" }) },
-        { id: "workspace", label: "保存当前窗口为工作区", keywords: "workspace save", run: () => { saveButton.click(); } },
+        { id: "workspace", label: "保存当前窗口为工作区", keywords: "workspace save", run: () => { revealElement(saveButton); saveButton.click(); } },
         { id: "suspend", label: "批量休眠预览", keywords: "suspend batch", run: () => batchUI.open() },
         { id: "budget", label: "预算回收预览", keywords: "memory budget", run: () => {
           const button = document.querySelector("[data-budget=preview]");
           if (!button) throw new Error("请开启资源预算并等待安全候选出现。");
+          revealElement(button);
           button.click(); button.scrollIntoView({ block: "nearest" });
         } },
         ...(undo ? [{ id: "undo", label: "撤销最近操作", detail: undo.label.split(" · ").slice(0, 2).join(" · "), keywords: "undo", run: () => send({ type: "undoOperation", operationId: undo.id }) }] : []),

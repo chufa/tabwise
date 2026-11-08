@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { show } from "./ui-navigation.mjs";
 
 export async function verifyContextMemory({ context, control, fixture, extensionUrl }) {
   const send = (type, payload = {}) => control.evaluate(({ type, payload }) => chrome.runtime.sendMessage({ type, ...payload }), { type, payload });
@@ -15,6 +16,7 @@ export async function verifyContextMemory({ context, control, fixture, extension
   }, saved);
   await send("updateSettings", { settings: { aiProvider: "browser", autoSuspend: false, resourceSamplingMode: "off" } });
   await control.reload();
+  await show(control, "#context-memory");
   const memory = control.locator("#context-memory"), form = memory.locator(".context-form");
   await memory.getByRole("button", { name: "新建任务", exact: true }).click();
   await form.locator('[name="name"]').fill("AI 任务续接验证");
@@ -28,7 +30,7 @@ export async function verifyContextMemory({ context, control, fixture, extension
   await memory.locator(".context-notice").filter({ hasText: "已保存在本地" }).waitFor();
   let task = (await send("listContextTasks")).tasks.find((item) => item.name === "AI 任务续接验证");
   assert.ok(task);
-  await memory.getByRole("button", { name: "选择资料加入任务", exact: true }).click();
+  await (await show(control, '[data-context="sources"]')).click();
   const picker = memory.locator(".context-picker");
   await picker.locator("[data-source-kind]").selectOption("workspace");
   await picker.locator("[data-source-workspace]").selectOption(saved.id);
@@ -39,12 +41,15 @@ export async function verifyContextMemory({ context, control, fixture, extension
   await memory.locator(".context-notice").filter({ hasText: "已加入任务" }).waitFor();
   assert.equal(await memory.locator("[data-model-source]:checked").count(), 0);
   const source = form.locator(".context-source").first();
+  await source.locator("[data-model-source]").check();
   await source.locator("summary").click();
   await source.locator("[data-source-note]").fill("核对本地恢复行为");
   await source.locator("[data-source-excerpt]").fill("用户提供的片段 user@private.test，尚需验证正文 https://secret.test/private-path");
   await form.getByRole("button", { name: "保存进度", exact: true }).click();
   await memory.locator(".context-notice").filter({ hasText: "已保存在本地" }).waitFor();
+  assert.equal(await source.locator("[data-model-source]").isChecked(), true, "saving notes preserves the chosen AI sources");
   await source.locator("[data-model-source]").check();
+  await show(control, '[data-context="preview"]');
   await memory.getByRole("button", { name: "预览续接输入", exact: true }).click();
   await memory.locator(".context-preview").filter({ hasText: "完整内容" }).waitFor();
   const previewText = await memory.locator(".context-preview").textContent();
@@ -77,12 +82,14 @@ export async function verifyContextMemory({ context, control, fixture, extension
   await memory.locator(".context-notice").filter({ hasText: "明确确认" }).waitFor();
   await memory.locator("[data-adopt-confirm]").check();
   await memory.getByRole("button", { name: "确认采纳草稿", exact: true }).click();
+  await show(control, ".context-accepted");
   await memory.locator(".context-accepted").filter({ hasText: "人工修改的续接摘要" }).waitFor();
   task = (await send("listContextTasks")).tasks.find((item) => item.id === task.id);
   assert.equal(task.confirmedNotes, "确认记录 api_key=sk-private-value");
   assert.equal(task.acceptedBrief.summary, "人工修改的续接摘要");
   assert.equal((await send("getDashboard")).tabs.length, beforeTabs);
   const jsonDownload = control.waitForEvent("download");
+  await show(control, '[data-context="json"]');
   await memory.getByRole("button", { name: "导出任务 JSON", exact: true }).click();
   const file = await jsonDownload;
   const exported = JSON.parse(await readFile(await file.path(), "utf8"));
@@ -95,15 +102,16 @@ export async function verifyContextMemory({ context, control, fixture, extension
   assert.ok(text.includes("资料 1"));
 
   // Live refresh must preserve unfinished edits; AI preview requires saved state.
-  await form.locator('[name="progress"]').fill("未保存的修改");
+  await (await show(control, form.locator('[name="progress"]'))).fill("未保存的修改");
   await send("resumeContextTask", { taskId: task.id });
-  await memory.getByRole("button", { name: "预览续接输入", exact: true }).click();
+  await (await show(control, '[data-context="preview"]')).click();
   await memory.locator(".context-notice").filter({ hasText: "有未保存" }).waitFor();
   assert.equal(await form.locator('[name="progress"]').inputValue(), "未保存的修改");
   await memory.getByRole("button", { name: "重新读取", exact: true }).click();
   await memory.locator(".context-notice").filter({ hasText: "已重新读取" }).waitFor();
   assert.equal(await form.locator('[name="progress"]').inputValue(), "已完成第一轮检查");
-  await source.locator("[data-model-source]").check();
+  await (await show(control, source.locator("[data-model-source]"))).check();
+  await show(control, '[data-context="preview"]');
   await memory.getByRole("button", { name: "预览续接输入", exact: true }).click();
   await memory.locator(".context-preview").filter({ hasText: "完整内容" }).waitFor();
   await control.evaluate(() => { globalThis.contextHold = true; });
@@ -133,21 +141,24 @@ export async function verifyContextMemory({ context, control, fixture, extension
     }
   }
   await control.reload();
+  await show(control, "#context-memory");
   await memory.locator(`[data-task-id="${task.id}"]`).getByRole("button").click();
+  await show(control, ".context-accepted");
   await memory.locator(".context-accepted").filter({ hasText: "人工修改的续接摘要" }).waitFor();
   assert.equal(hitCount(), initialHits, "returning to a task never loads its sources");
-  await memory.getByRole("button", { name: "选择资料继续", exact: true }).click();
+  await (await show(control, '[data-context="restore"]')).click();
   const restore = control.locator("#restore-preview");
   await restore.locator(".restore-load-mode").selectOption("on-demand");
   await restore.getByRole("button", { name: "恢复所选页面", exact: true }).click();
   await control.waitForFunction(async (id) => (await chrome.runtime.sendMessage({ type: "getRestoreTasks" }))
     .some((task) => task.kind === "context" && task.sourceId === id && task.status === "completed"), task.id);
   assert.equal(hitCount(), initialHits, "on-demand task restore never requests original website");
-  await memory.getByRole("button", { name: "归档任务", exact: true }).click();
+  await (await show(control, '[data-context="archive"]')).click();
   await memory.locator(".context-notice").filter({ hasText: "归档状态已保存" }).waitFor();
-  await memory.locator(".context-filter select").selectOption("archived");
+  await (await show(control, ".context-filter select")).selectOption("archived");
   await memory.locator(`[data-task-id="${task.id}"]`).getByRole("button").waitFor();
-  await memory.getByRole("button", { name: "取消归档", exact: true }).click();
+  await (await show(control, '[data-context="archive"]')).click();
+  await show(control, '[data-context="archive"]');
   await memory.getByRole("button", { name: "归档任务", exact: true }).waitFor();
   assert.equal((await send("listContextTasks")).tasks.find((item) => item.id === task.id).status, "active");
   await send("updateSettings", { settings: { aiProvider: "ollama" } });
@@ -156,8 +167,10 @@ export async function verifyContextMemory({ context, control, fixture, extension
 }
 
 export async function verifyContextRestart(control, saved) {
+  await show(control, "#context-memory");
   const memory = control.locator("#context-memory");
   await memory.locator(`[data-task-id="${saved.id}"]`).getByRole("button").click();
+  await show(control, ".context-accepted");
   await memory.locator(".context-accepted").filter({ hasText: saved.summary }).waitFor();
   assert.equal(await memory.locator('.context-form [name="progress"]').inputValue(), "已完成第一轮检查");
   assert.equal(await memory.locator(".context-draft button").count(), 0);

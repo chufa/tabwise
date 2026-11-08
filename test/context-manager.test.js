@@ -30,8 +30,10 @@ const answer = (snapshot) => ({ schemaVersion: 1, snapshotId: snapshot.id, summa
 test("context commands reject other surfaces before reading private memory; CRUD is durable and optimistic", async () => {
   const f = fixture();
   await assert.rejects(call(f.manager, "listContextTasks", {}, { ...sender, url: "https://site.test/" }), /侧栏/);
+  await assert.rejects(call(f.manager, "listContextTasks", {}, { ...sender, url: `${sender.url}?task=1#tasks` }), /侧栏/);
+  await assert.rejects(call(f.manager, "listContextTasks", {}, { ...sender, id: "other-extension", url: `${sender.url}#tasks` }), /侧栏/);
   assert.equal(f.reads, 0);
-  const { task } = await call(f.manager, "createContextTask", { fields });
+  const { task } = await call(f.manager, "createContextTask", { fields }, { ...sender, url: `${sender.url}#tasks` });
   await call(f.manager, "updateContextTask", { taskId: task.id, revision: 1, patch: { progress: "第一步已完成" } });
   await assert.rejects(call(f.manager, "updateContextTask", { taskId: task.id, revision: 1, patch: { progress: "覆盖" } }), /变化/);
   const restarted = createContextManager(f.deps);

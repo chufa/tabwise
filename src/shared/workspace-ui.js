@@ -139,6 +139,7 @@ export function createWorkspaceUI(host, restoreUI, feedback, refresh) {
   const selected = new Set();
   host.innerHTML = `<div class="workspace-filters saved-actions">
     <input class="ws-query" type="search" maxlength="200" aria-label="搜索工作区" placeholder="搜索名称、标签或备注">
+    <details class="workspace-filter-details"><summary>筛选与整理</summary><div class="saved-actions">
     <label>标签<select class="ws-tag"><option value="">全部标签</option></select></label>
     <label>状态<select class="ws-status"><option value="all">全部状态</option><option value="active">未归档</option><option value="archived">已归档</option></select></label>
     <label><input class="ws-favorite" type="checkbox">仅收藏</label>
@@ -146,7 +147,7 @@ export function createWorkspaceUI(host, restoreUI, feedback, refresh) {
     <input class="ws-filter-name" maxlength="40" aria-label="筛选名称" placeholder="筛选名称">
     <button type="button" data-filter="save">保存筛选</button><button type="button" data-filter="delete">删除筛选</button>
     <button type="button" data-organize-duplicates>合并当前窗口重复页</button>
-    </div><div class="workspace-favorites saved-actions" aria-label="收藏工作区快捷入口"></div><div class="workspace-list"></div>
+    </div></details></div><div class="workspace-favorites saved-actions" aria-label="收藏工作区快捷入口"></div><div class="workspace-list"></div>
     <form class="merge-workspaces" hidden><label>合并后的名称<input name="merge-name" maxlength="80" required placeholder="新工作区名称"></label>
     <p class="saved-hint">合并所选工作区；布局快照保留窗口和重复页面，原工作区保留。</p><button type="submit">合并所选工作区</button></form>
     <div class="workspace-editor" hidden></div>
@@ -155,6 +156,7 @@ export function createWorkspaceUI(host, restoreUI, feedback, refresh) {
     if (busy) return;
     for (const id of selected) if (!workspaces.some((item) => item.id === id)) selected.delete(id);
     const visible = filterWorkspaces(workspaces, { ...facets, query: filter });
+    host.querySelector(".workspace-filter-details > summary").textContent = `筛选与整理${facets.tag || facets.status !== "all" || facets.favorite ? " · 已筛选" : ""}`;
     updateHTML(host.querySelector(".workspace-favorites"), workspaces.filter((workspace) => workspace.favorite).map((workspace) =>
       `<span data-id="${escapeHtml(workspace.id)}"><button type="button" data-ws="open">★ ${escapeHtml(workspace.name)}</button></span>`).join(""));
     updateHTML(host.querySelector(".ws-tag"), `<option value="">全部标签</option>${[...new Set(workspaces.flatMap((item) => item.tags || []))].map((tag) => `<option value="${escapeHtml(tag)}">${escapeHtml(tag)}</option>`).join("")}`);
@@ -167,12 +169,13 @@ export function createWorkspaceUI(host, restoreUI, feedback, refresh) {
       ${workspace.notes ? `<small class="workspace-notes">${highlightMatch(workspace.notes, filter)}</small>` : ""}</div></div>
       <div class="saved-actions" data-id="${escapeHtml(workspace.id)}">
         <button type="button" data-ws="open">选择恢复</button><button type="button" data-ws="edit">编辑</button>
+        <details class="workspace-more"><summary>更多</summary><div class="saved-actions">
         <button type="button" data-ws="links">检测链接</button>
         <button type="button" data-ws="bind">关联当前窗口</button><button type="button" data-ws="update">更新预览</button><button type="button" data-ws="versions">历史版本</button>
         <button type="button" data-ws="pin">${workspace.pinned ? "取消固定" : "固定"}</button>
         <button type="button" data-ws="archive">${workspace.archived ? "取消归档" : "归档"}</button>
         <button type="button" data-ws="trash">移入回收站</button>
-      </div></article>`).join("") || '<p class="saved-hint">暂无匹配的工作区。保存当前窗口后可在这里恢复和编辑。</p>');
+      </div></details></div></article>`).join("") || '<p class="saved-hint">暂无匹配的工作区。保存当前窗口后可在这里恢复和编辑。</p>');
     host.querySelector(".merge-workspaces").hidden = selected.size < 2;
     host.querySelector(".workspace-trash summary span").textContent = `(${trash.length})`;
     updateHTML(host.querySelector(".trash-list"), trash.map((workspace) => `<article class="saved-workspace" data-key="${escapeHtml(workspace.id)}">

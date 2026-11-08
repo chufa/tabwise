@@ -1,6 +1,7 @@
 import { escapeHtml as e } from "../shared/html.js";
 import { createPagedList } from "../shared/paged-ui.js";
 import { updateHTML } from "../shared/live-ui.js";
+import { createNavigation, revealElement } from "../shared/navigation.js";
 
 const send = async (type, payload = {}) => {
   const result = await chrome.runtime.sendMessage({ type, ...payload });
@@ -31,11 +32,14 @@ function download(name, content, type, suffix) {
 export function createContextUI(host, { restoreUI, createLocalModel }) {
   let tasks = [], workspaces = [], task, dirty = false, prepared, draft, picker, sourceSelection;
   let version = 0, busy = false, writing = false, controller, session, port;
-  host.innerHTML = `<div class="section-heading"><h2>任务记忆</h2><button type="button" data-context="new">新建任务</button></div>
-    <p class="saved-hint">保存目标和进度，下次回来继续。选定资料可交给您配置的 AI 模型生成续接草稿。</p>
-    <label class="context-filter">任务范围<select aria-label="任务范围"><option value="active">进行中</option><option value="archived">已归档</option><option value="all">全部任务</option></select></label>
-    <div class="context-list">正在读取任务。</div><div class="context-editor" hidden></div>
-    <p class="context-notice" role="status"></p>`;
+  host.innerHTML = `<div class="section-heading"><h2>继续你的工作</h2><button class="primary-button" type="button" data-context="new">新建任务</button></div>
+    <p class="saved-hint">记住目标、进度和资料，下次回来从这里继续。</p>
+    <p class="context-notice" role="status" aria-live="polite"></p>
+    <details class="context-browser" open><summary hidden>切换任务</summary>
+      <label class="context-filter">任务范围<select aria-label="任务范围"><option value="active">进行中</option><option value="archived">已归档</option><option value="all">全部任务</option></select></label>
+      <label class="context-search">查找任务<input type="search" placeholder="搜索任务名称或目标" aria-label="查找任务"></label>
+      <div class="context-list">正在读取任务。</div>
+    </details><div class="context-editor" hidden></div>`;
   const editor = host.querySelector(".context-editor");
   const notice = (message, error = false) => {
     host.querySelector(".context-notice").textContent = message;
@@ -60,24 +64,40 @@ export function createContextUI(host, { restoreUI, createLocalModel }) {
   };
   const drawList = () => {
     const filter = host.querySelector(".context-filter select").value;
-    updateHTML(host.querySelector(".context-list"), tasks.filter((item) => filter === "all" || item.status === filter).map((item) =>
-      `<article class="context-row" data-task-id="${e(item.id)}"><button type="button" data-context="open">${e(item.name)}</button>
+    const query = host.querySelector(".context-search input").value.trim().toLocaleLowerCase();
+    const visible = tasks.filter((item) => (filter === "all" || item.status === filter) && (!query || `${item.name} ${item.goal}`.toLocaleLowerCase().includes(query)));
+    host.querySelector(".context-browser summary").textContent = `切换任务 · ${visible.length} 个${filter === "archived" ? "已归档" : filter === "active" ? "进行中" : ""}`;
+    updateHTML(host.querySelector(".context-list"), visible.map((item) =>
+      `<article class="context-row ${item.id === task?.id ? "is-current" : ""}" data-task-id="${e(item.id)}"><button type="button" data-context="open" ${item.id === task?.id ? 'aria-current="true"' : ""}>${e(item.name)}</button>
         <small>${item.sources.length} 个资料 · ${item.status === "archived" ? "已归档" : "进行中"} · ${e(item.progress.slice(0, 100) || "尚未记录进度")}</small></article>`).join("")
-      || '<p class="saved-hint">暂无任务。新建任务后记录目标，并选择本次需要的资料。</p>');
+      || (tasks.length ? '<p class="saved-hint">没有匹配的任务。试试其他关键词或任务范围。</p>' : '<div class="context-empty"><h3>让下一次开始更轻松</h3><p class="saved-hint">新建一个任务，写下目标和做到哪一步。需要时再加入页面资料，或使用 AI 整理续接建议。</p></div>'));
   };
   const refreshList = async () => {
     const result = await send("listContextTasks");
     tasks = result.tasks; workspaces = result.workspaces; drawList();
     if (task && !writing && !tasks.some((item) => item.id === task.id)) {
-      reset(); task = null; dirty = false; editor.hidden = true; notice("该任务已从另一个侧栏删除。");
+      reset(); task = null; dirty = false; editor.hidden = true; host.querySelector(".context-browser").open = true; notice("该任务已从另一个侧栏删除。");
     } else if (task && tasks.find((item) => item.id === task.id)?.revision !== task.revision) {
       notice("任务已在另一个侧栏更新。请重新读取后继续编辑。", true);
     }
   };
   const renderEditor = (value) => {
+    const sameTask = value?.id && value.id === task?.id;
+    const currentView = sameTask ? editor.querySelector('[role="tab"][aria-selected="true"]')?.dataset.viewButton : null;
+    const handoffOpen = sameTask && editor.querySelector(".context-handoff")?.open;
+    const scrollPosition = window.scrollY;
     reset(); sourceSelection?.destroy(); sourceSelection = null; picker = null;
     task = value; dirty = false; editor.hidden = false;
-    editor.innerHTML = `<form class="context-form">
+    host.querySelector(".context-browser").open = false;
+    host.querySelector(".context-browser summary").hidden = false;
+    editor.dataset.navigation = "context";
+    editor.innerHTML = `<div class="context-editor-title"><h3>${e(task?.name || "记录一个新任务")}</h3>${task ? '<button type="button" data-context="back">任务列表</button>' : ""}</div>
+      ${task ? `<nav class="sub-tabs" role="tablist" aria-label="任务步骤">
+        <button id="context-tab-progress" role="tab" aria-controls="context-view-progress" data-view-button="progress" type="button">记录进度</button>
+        <button id="context-tab-sources" role="tab" aria-controls="context-view-sources" data-view-button="sources" type="button">任务资料</button>
+        <button id="context-tab-ai" role="tab" aria-controls="context-view-ai" data-view-button="ai" type="button">AI 续接</button></nav>` : ""}
+      <form class="context-form" novalidate>
+      <div id="context-view-progress" ${task ? 'role="tabpanel" aria-labelledby="context-tab-progress" data-view="progress"' : ""}>
       <div class="context-fields"><label>任务名称<input name="name" maxlength="80" value="${e(task?.name || "")}" required placeholder="例如：Chrome 内存调研"></label>
       ${field("goal", "任务目标", task?.goal, 2000, 3, true)}
       ${field("progress", "当前进度", task?.progress, 4000)}
@@ -85,9 +105,8 @@ export function createContextUI(host, { restoreUI, createLocalModel }) {
       ${field("confirmedNotes", "用户确认的记录", task?.confirmedNotes, 4000)}
       ${field("questions", "未决问题（每行一项，最多 20 项）", task?.questions.join("\n"), 10020)}
       ${field("nextSteps", "下一步（每行一项，最多 20 项）", task?.nextSteps.join("\n"), 10020)}</div></details></div>
-      <div class="saved-actions"><button type="submit">${task ? "保存进度" : "创建任务"}</button>
-        ${task ? '<button type="button" data-context="reload">重新读取</button>' : '<button type="button" data-context="close">取消创建</button>'}</div>
-      ${task ? `<h3>任务资料</h3><p class="saved-hint">勾选本次交给 AI 的资料；默认不选。笔记和片段由你手动提供，插件不会读取网页正文。</p>
+      </div>
+      ${task ? `<div id="context-view-sources" role="tabpanel" aria-labelledby="context-tab-sources" data-view="sources" hidden><h3>任务资料 · ${task.sources.length} 个</h3><p class="saved-hint">勾选本次交给 AI 的资料；默认不选。笔记和片段由你手动提供，插件不会读取网页正文。</p>
         <div class="context-sources">${task.sources.map((source, index) => `<div class="context-source" data-source-id="${e(source.id)}">
         <label><input type="checkbox" data-model-source value="${e(source.id)}"><span><a href="${e(source.url)}" target="_blank" rel="noopener noreferrer">${index + 1}. ${e(source.title)}</a>
         <small>${e(new URL(source.url).hostname)}</small></span></label>
@@ -95,18 +114,27 @@ export function createContextUI(host, { restoreUI, createLocalModel }) {
         <label>手动提供的片段<textarea data-source-excerpt maxlength="2000" rows="3">${e(source.excerpt)}</textarea></label>
         <label><input type="checkbox" data-source-remove>保存时移除此资料</label></details></div>`).join("") || '<p class="saved-hint">暂无资料，也可以只根据已记录的进度生成续接草稿。</p>'}</div>
         <div class="saved-actions"><button type="button" data-context="sources">选择资料加入任务</button>
-        <button type="button" data-context="restore" ${task.sources.length ? "" : "disabled"}>选择资料继续</button></div>` : ""}
+        <button type="button" data-context="restore" ${task.sources.length ? "" : "disabled"}>选择资料继续</button></div><div class="context-picker" hidden></div></div>` : ""}
+      <div class="context-savebar"><button class="primary-button" type="submit">${task ? "保存进度" : "创建任务"}</button>
+        ${task ? '<button type="button" data-context="reload">重新读取</button><span>编辑后保存到本机</span>' : '<button type="button" data-context="close">取消创建</button>'}</div>
       </form>
-      ${task ? `<div class="context-picker" hidden></div>
+      ${task ? `<div id="context-view-ai" role="tabpanel" aria-labelledby="context-tab-ai" data-view="ai" hidden>
         <h3>AI 任务续接</h3><p class="saved-hint">先核对将交给哪个模型的内容，再生成草稿。AI 判断仍需验证，采纳后会单独保存。</p>
-        <div class="saved-actions"><button type="button" data-context="preview">预览续接输入</button>
-        <button type="button" data-context="generate" disabled>生成续接草稿</button><button type="button" data-context="stop" hidden>停止生成</button></div>
-        <div class="context-preview"></div><div class="context-draft"></div>${accepted(task)}
-        <h3>上下文交接</h3><p class="saved-hint">复制或下载包含原始网址的上下文包，交给 AI 对话或 IDE。任务仅保存在本机。</p>
+        <ol class="flow-steps" aria-label="续接步骤"><li>预览输入</li><li>生成草稿</li><li>审阅采纳</li></ol>
+        <p class="saved-hint"><span class="context-chosen">本次未选择资料，将仅使用任务记录。</span> <button type="button" data-context="choose-model-sources">选择本次资料</button></p>
+        <div class="saved-actions"><button class="primary-button" type="button" data-context="preview">预览续接输入</button></div>
+        <div class="context-preview"></div>
+        <div class="saved-actions"><button class="primary-button" type="button" data-context="generate" disabled>生成续接草稿</button><button type="button" data-context="stop" hidden>停止生成</button></div>
+        <div class="context-draft"></div>${accepted(task)}</div>
+        <details class="context-handoff"><summary>导出与交接</summary><p class="saved-hint">复制或下载包含原始网址的上下文包，交给 AI 对话或 IDE。任务仅保存在本机。</p>
         <div class="saved-actions"><button type="button" data-context="copy">复制 Markdown</button><button type="button" data-context="markdown">下载 Markdown</button>
         <button type="button" data-context="json">导出任务 JSON</button><button type="button" data-context="archive">${task.status === "archived" ? "取消归档" : "归档任务"}</button></div>
         <details><summary>删除任务记忆</summary><p>删除此任务及其笔记和草稿，已打开的页面保持打开。</p>
-        <label><input type="checkbox" data-delete-confirm>我确认删除此任务记忆</label><div class="saved-actions"><button type="button" data-context="delete">删除任务记忆</button></div></details>` : ""}`;
+        <label><input type="checkbox" data-delete-confirm>我确认删除此任务记忆</label><div class="saved-actions"><button type="button" data-context="delete">删除任务记忆</button></div></details></details>` : ""}`;
+    if (task) createNavigation(editor, { initial: currentView || "progress" });
+    if (handoffOpen) editor.querySelector(".context-handoff").open = true;
+    drawList();
+    if (sameTask) window.scrollTo({ top: scrollPosition, behavior: "instant" });
   };
   const preview = async () => {
     clean(); reset(); const current = version, id = task.id;
@@ -189,6 +217,8 @@ export function createContextUI(host, { restoreUI, createLocalModel }) {
     event.preventDefault();
     if (writing) return;
     const form = event.target, current = version;
+    const invalid = [...form.elements].find((input) => input.validity && !input.validity.valid);
+    if (invalid) { revealElement(invalid); invalid.reportValidity(); notice("请填写任务名称和目标，再保存进度。", true); return; }
     const patch = Object.fromEntries(new FormData(form));
     if (task) {
       patch.sourceIds = task.sources.filter((source) => ![...form.querySelectorAll(".context-source")].find((row) =>
@@ -200,13 +230,27 @@ export function createContextUI(host, { restoreUI, createLocalModel }) {
     try {
       const result = await send(task ? "updateContextTask" : "createContextTask", task ? { taskId: task.id, revision: task.revision, patch } : { fields: patch });
       if (current !== version) return;
-      renderEditor(result.task); await refreshList(); notice("任务进度已保存在本地。");
+      const selected = [...editor.querySelectorAll("[data-model-source]:checked")].map((input) => input.value);
+      const destination = editor.querySelector('[role="tab"][aria-selected="true"]')?.dataset.viewButton;
+      renderEditor(result.task);
+      for (const input of editor.querySelectorAll("[data-model-source]")) input.checked = selected.includes(input.value);
+      const count = editor.querySelectorAll("[data-model-source]:checked").length;
+      editor.querySelector(".context-chosen").textContent = count ? `本次已选 ${count} 个资料。` : "本次未选择资料，将仅使用任务记录。";
+      if (destination) revealElement(editor.querySelector(`[data-view="${destination}"]`));
+      await refreshList(); notice("任务进度已保存在本地。");
     } catch (error) { notice(error.message, true); }
     finally { writing = false; unlock(); }
   });
   host.addEventListener("input", (event) => {
+    if (event.target.matches(".context-search input")) { drawList(); return; }
+    if (event.target.closest(".context-picker")) return;
     if (event.target.closest(".context-form")) {
-      if (event.target.matches("[data-model-source]")) { reset(); return; }
+      if (event.target.matches("[data-model-source]")) {
+        reset();
+        const count = editor.querySelectorAll("[data-model-source]:checked").length;
+        editor.querySelector(".context-chosen").textContent = count ? `本次已选 ${count} 个资料。` : "本次未选择资料，将仅使用任务记录。";
+        return;
+      }
       dirty = true; reset(); notice("有未保存的编辑。");
     }
   });
@@ -231,7 +275,9 @@ export function createContextUI(host, { restoreUI, createLocalModel }) {
         await refreshList(); const fresh = tasks.find((item) => item.id === task?.id);
         if (fresh) renderEditor(fresh); notice("已重新读取本地记录。"); return;
       }
-      if (action === "close") { reset(); editor.hidden = true; dirty = false; return; }
+      if (action === "choose-model-sources") { revealElement(editor.querySelector("#context-view-sources")); return; }
+      if (action === "back") { clean(); reset(); editor.hidden = true; host.querySelector(".context-browser").open = true; drawList(); notice(""); return; }
+      if (action === "close") { reset(); editor.hidden = true; dirty = false; host.querySelector(".context-browser").open = true; notice(""); return; }
       if (action === "new") { clean(); renderEditor(null); editor.querySelector('[name="name"]').focus(); return; }
       if (action === "open") {
         clean(); reset(); const current = version;
@@ -243,7 +289,7 @@ export function createContextUI(host, { restoreUI, createLocalModel }) {
       if (["attach", "adopt", "archive", "delete"].includes(action)) {
         writing = true; unlock = lockEditor(); notice("正在保存任务…");
       }
-      if (action === "sources") return await openPicker();
+      if (action === "sources") { revealElement(editor.querySelector("#context-view-sources")); return await openPicker(); }
       if (action === "source-close") { editor.querySelector(".context-picker").hidden = true; picker = null; return; }
       if (action === "source-preview") {
         const current = version;
@@ -259,7 +305,7 @@ export function createContextUI(host, { restoreUI, createLocalModel }) {
       if (action === "attach") {
         if (!picker) return;
         const result = await send("attachContextSources", { taskId: task.id, revision: task.revision, previewId: picker.id, sourceIds: sourceSelection.values(), confirm: true });
-        renderEditor(result.task); await refreshList(); notice("选定资料已加入任务，相同网址只保留一次。"); return;
+        renderEditor(result.task); revealElement(editor.querySelector("#context-view-sources")); await refreshList(); notice("选定资料已加入任务，相同网址只保留一次。"); return;
       }
       if (action === "restore") return await restoreUI.open("context", task.id);
       if (action === "preview") return await preview();
@@ -289,7 +335,7 @@ export function createContextUI(host, { restoreUI, createLocalModel }) {
       }
       if (action === "delete") {
         await send("deleteContextTask", { taskId: task.id, revision: task.revision, confirm: editor.querySelector("[data-delete-confirm]").checked });
-        reset(); task = null; dirty = false; editor.hidden = true; await refreshList(); notice("任务记忆已删除。");
+        reset(); task = null; dirty = false; editor.hidden = true; host.querySelector(".context-browser").open = true; await refreshList(); notice("任务记忆已删除。");
       }
     } catch (error) { notice(error.message, true); }
     finally { if (unlock) { writing = false; unlock(); } }

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
+import { show } from "./ui-navigation.mjs";
 
 export async function verifyExpansion({ context, control, fixture, extensionUrl, message, waitForBrowserState, waitForWorker }) {
   const errors = [];
@@ -15,6 +16,7 @@ export async function verifyExpansion({ context, control, fixture, extensionUrl,
   const preview = await message(control, "prepareRestore", { kind: "workspace", sourceId: source.id });
   const started = await message(control, "startRestore", { previewId: preview.previewId, indices: source.tabs.map((_, i) => i), skipExisting: true });
   assert.ok(started.taskId);
+  await show(control, "#restore-tasks");
   await waitForBrowserState(control, async (id) => {
     const { restoreTasks } = await chrome.storage.session.get("restoreTasks");
     return restoreTasks.find((task) => task.id === id)?.results.filter((page) => page.status === "opening" && page.tabId).length === 5;
@@ -48,7 +50,8 @@ export async function verifyExpansion({ context, control, fixture, extensionUrl,
   const workspace = await message(control, "saveWorkspace", { name: "增量更新验证" });
   await waitForBrowserState(control, (id) => Boolean(document.querySelector(`[data-id="${id}"]`)), workspace.id);
   const card = control.locator(".saved-workspace").filter({ hasText: "增量更新验证" });
-  await card.getByRole("button", { name: "关联当前窗口" }).click();
+  await show(control, card);
+  await (await show(control, card.locator('[data-ws="bind"]'))).click();
   const added = await control.evaluate((base) => chrome.tabs.create({ url: `${base}/incremental-new`, active: false }), fixture.baseUrl);
   await waitForBrowserState(control, async (id) => (await chrome.tabs.get(id)).status === "complete", added.id);
   await card.getByRole("button", { name: "更新预览", exact: true }).click();
@@ -82,6 +85,7 @@ export async function verifyExpansion({ context, control, fixture, extensionUrl,
     await chrome.storage.session.set({ lastActivity, pageProtectionStates: { [tabs[0].id]: { ready: true }, [tabs[1].id]: { ready: true }, [tabs[2].id]: { ready: true, dirty: true } } });
   }, budgetTabs);
   await control.reload();
+  await show(control, "[data-budget=preview]");
   await control.locator("[data-budget=preview]").waitFor();
   await control.locator("[data-budget=preview]").click();
   await control.locator('.budget-preview input[type="checkbox"]').first().waitFor();
@@ -149,7 +153,7 @@ export async function verifyExpansion({ context, control, fixture, extensionUrl,
   const options = await context.newPage();
   await options.goto(`${extensionUrl}/src/options/options.html`);
   await options.waitForFunction(() => document.querySelector("#budget-tabs").value === "1");
-  await options.locator("#budget-enabled").check(); await options.locator("#budget-tabs").fill("60");
+  await (await show(options, "#budget-enabled")).check(); await options.locator("#budget-tabs").fill("60");
   await options.locator("#settings-form").getByRole("button", { name: "保存设置", exact: true }).click();
   await options.getByText("已保存", { exact: true }).waitFor();
   await options.reload(); await options.waitForFunction(() => document.querySelector("#budget-tabs").value === "60");

@@ -1,5 +1,6 @@
 import { modelRecipient, sameModel, normalizeCompatibleEndpoint, requestModelJson, fetchModelJson } from "../shared/ai-provider.js";
 import { normalizeOllamaModel, OLLAMA_PROBE_SCHEMA, validateOllamaProbe } from "../shared/ollama.js";
+import { isExtensionPage } from "../shared/extension-page.js";
 
 const KEY = "modelCredential";
 export const MODEL_COMMANDS = new Set(["getModelCredentialStatus", "saveCompatibleConfig", "clearModelCredential", "listCompatibleModels", "testCompatibleConnection"]);
@@ -26,7 +27,7 @@ export function createModelAccess({ getSettings, changeSettings }) {
     return config;
   };
   const guard = (sender) => {
-    if (sender?.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL("src/options/options.html") || !sender.documentId) throw new Error("模型密钥仅可从 TabWise 设置页管理。");
+    if (!isExtensionPage(sender, "src/options/options.html") || !sender.documentId) throw new Error("模型密钥仅可从 TabWise 设置页管理。");
   };
   const credentialFor = async (endpoint) => {
     const stored = await read();

@@ -6,8 +6,10 @@
     <title>TabWise</title>
     <link rel="stylesheet" href="popup.css">
     <link rel="stylesheet" href="../shared/workspace-ui.css">
+    <link rel="stylesheet" href="../shared/interface.css">
   </head>
-  <body>
+  <body class="popup-surface" data-navigation="popup">
+    <div class="panel-header">
     <header class="topbar">
       <div class="brand-lockup">
         <span class="brand-mark" aria-hidden="true">TW</span>
@@ -18,30 +20,37 @@
       </div>
       <div class="topbar-actions">
         <button id="open-palette" class="quiet-button" type="button" title="⌘ / Ctrl K">命令</button>
-        <button id="open-search" class="quiet-button" type="button">搜索</button>
+        <button id="open-search" class="quiet-button" type="button">工作台</button>
         <button id="settings" class="quiet-button" type="button">设置</button>
       </div>
     </header>
-
+    <nav class="surface-tabs" role="tablist" aria-label="快捷工具">
+      <button id="popup-nav-tabs" role="tab" aria-controls="popup-tabs" data-view-button="tabs" type="button">标签页</button>
+      <button id="popup-nav-organize" role="tab" aria-controls="popup-organize" data-view-button="organize" type="button">快速整理</button>
+      <button id="popup-nav-saved" role="tab" aria-controls="popup-saved" data-view-button="saved" type="button">保存与找回</button>
+    </nav>
+    </div>
+    <p id="action-feedback" class="feedback floating-feedback" role="status" aria-live="polite"></p>
+    <section id="restore-preview" class="saved-tools restore-preview" hidden aria-label="恢复预览"></section>
+    <div id="popup-organize" role="tabpanel" aria-labelledby="popup-nav-organize" data-view="organize" hidden>
+    <div class="view-intro"><h2>给页面腾出空间</h2><p>按网站分组，或预览可休眠的页面。</p></div>
     <section class="command-strip" aria-label="休眠控制">
-      <button id="suspend-eligible" class="primary-button" type="button">休眠本窗口可用标签</button>
+      <button id="suspend-eligible" class="primary-button" type="button">预览批量休眠</button>
       <button id="pause-automation" class="secondary-button" type="button">暂停 1 小时</button>
     </section>
-    <p id="action-feedback" class="feedback" role="status"></p>
-    <section id="restore-preview" class="saved-tools restore-preview" hidden aria-label="恢复预览"></section>
-    <section id="restore-tasks" class="saved-tools" aria-label="恢复任务中心"></section>
-    <section id="session-tools" class="saved-tools session-tools" aria-label="会话找回"></section>
-
-    <section class="summary" aria-label="标签概览">
-      <div><strong id="open-count">0</strong><span>全部标签</span></div>
-      <div><strong id="eligible-count">0</strong><span>可休眠</span></div>
-      <div><strong id="suspended-count">0</strong><span>休眠中</span></div>
+    <details class="tool-disclosure resource-details"><summary>资源估算与预算</summary><section class="summary" aria-label="资源概览">
       <div><strong id="duplicate-count">0</strong><span>重复页</span></div>
       <div><strong id="js-heap-usage">--</strong><span>JS 堆总量</span></div>
     </section>
     <p id="resource-note" class="resource-note" role="note"></p>
     <section id="resource-budget" class="saved-tools" aria-label="资源预算"></section>
-
+    </details>
+    <section class="section">
+      <div class="section-heading"><h2>按网站整理</h2><span id="suggestion-count" class="count-label"></span></div>
+      <div id="suggestions" class="list empty-state">正在分析标签页...</div>
+    </section>
+    </div>
+    <div id="popup-saved" role="tabpanel" aria-labelledby="popup-nav-saved" data-view="saved" hidden>
     <section class="section">
       <div class="section-heading">
         <h2>最近休眠</h2>
@@ -58,14 +67,32 @@
       <div id="checkpoints" class="list empty-state">恢复点会每 30 分钟自动保存。</div>
     </section>
 
-    <section class="section">
+    <section id="restore-tasks" class="saved-tools" aria-label="恢复任务中心"></section>
+    <section id="session-tools" class="saved-tools session-tools" aria-label="会话找回"></section>
+    <section class="section workspace-section">
       <div class="section-heading">
-        <h2>智能整理</h2>
-        <span id="suggestion-count" class="count-label"></span>
+        <h2>工作区</h2>
+        <button id="toggle-workspace-form" class="quiet-button" type="button">保存当前窗口</button>
       </div>
-      <div id="suggestions" class="list empty-state">正在分析标签页...</div>
+      <form id="workspace-form" class="workspace-form" hidden>
+        <label class="visually-hidden" for="workspace-name">工作区名称</label>
+        <input id="workspace-name" maxlength="80" required placeholder="例如：本周调研">
+        <button class="secondary-button" type="submit">保存</button>
+        <button id="cancel-workspace" class="quiet-button" type="button">取消</button>
+      </form>
+      <label class="workspace-search-field">
+        <span class="visually-hidden">搜索保存的工作区</span>
+        <input id="workspace-search" type="search" placeholder="搜索保存的工作区">
+      </label>
+      <div id="workspaces" class="saved-tools"></div>
     </section>
-
+    </div>
+    <div id="popup-tabs" role="tabpanel" aria-labelledby="popup-nav-tabs" data-view="tabs">
+    <section class="summary" aria-label="标签概览">
+      <div><strong id="open-count">0</strong><span>全部标签</span></div>
+      <div><strong id="eligible-count">0</strong><span>可休眠</span></div>
+      <div><strong id="suspended-count">0</strong><span>休眠中</span></div>
+    </section>
     <section class="section tabs-section">
       <div class="section-heading">
         <h2>标签页</h2>
@@ -86,32 +113,17 @@
         </label>
       </div>
       <div class="filter-bar" role="group" aria-label="标签状态筛选">
-        <button class="filter is-active" data-filter="all" type="button">全部</button>
-        <button class="filter" data-filter="live" type="button">可休眠</button>
-        <button class="filter" data-filter="suspended" type="button">休眠中</button>
-        <button class="filter" data-filter="protected" type="button">已保护</button>
+        <button class="filter is-active" data-filter="all" aria-pressed="true" type="button">全部</button>
+        <button class="filter" data-filter="live" aria-pressed="false" type="button">可休眠</button>
+        <button class="filter" data-filter="suspended" aria-pressed="false" type="button">休眠中</button>
+        <button class="filter" data-filter="protected" aria-pressed="false" type="button">已保护</button>
       </div>
       <p class="protection-hint">“已保护”标签默认不会自动休眠。可直接休眠非活动网页，但请先确认页面没有未保存内容。</p>
       <div id="tabs" class="list"></div>
       <nav id="tab-pagination" class="saved-tools saved-actions" aria-label="标签页分页"></nav>
     </section>
 
-    <section class="section workspace-section">
-      <div class="section-heading">
-        <h2>工作区</h2>
-        <button id="toggle-workspace-form" class="quiet-button" type="button">保存当前窗口</button>
-      </div>
-      <form id="workspace-form" class="workspace-form" hidden>
-        <label class="visually-hidden" for="workspace-name">工作区名称</label>
-        <input id="workspace-name" maxlength="80" required placeholder="例如：本周调研">
-        <button class="secondary-button" type="submit">保存</button>
-      </form>
-      <label class="workspace-search-field">
-        <span class="visually-hidden">搜索保存的工作区</span>
-        <input id="workspace-search" type="search" placeholder="搜索保存的工作区">
-      </label>
-      <div id="workspaces" class="saved-tools"></div>
-    </section>
+    </div>
     <script type="module" src="popup.js"></script>
   </body>
 </html>

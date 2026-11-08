@@ -5,7 +5,8 @@ export function createBatchUI(feedback, refresh) {
   host.className = "saved-tools restore-preview";
   host.setAttribute("aria-label", "批量操作预览");
   host.id = "batch-preview"; host.hidden = true;
-  document.querySelector("#restore-tasks").before(host);
+  // A preview must stay visible regardless of the selected workbench destination.
+  document.querySelector("#restore-preview").after(host);
   let preview, members, revision = 0;
   host.addEventListener("click", async (event) => {
     const button = event.target.closest("[data-batch]");

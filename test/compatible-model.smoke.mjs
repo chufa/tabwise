@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { chromium } from "playwright";
 import { verifyModelTask } from "./model-task.e2e.mjs";
+import { show } from "./ui-navigation.mjs";
 
 const channel = process.env.TABWISE_MODEL_CHANNEL || "chromium";
 const artifacts = process.env.TABWISE_E2E_ARTIFACT_DIR || await mkdtemp(path.join(os.tmpdir(), "tabwise-compatible-"));
@@ -135,7 +136,7 @@ try {
   await options.locator("#compatible-feedback").filter({ hasText: "模型配置已保存" }).waitFor();
   assert.equal((await sendOptions("getModelCredentialStatus")).persistence, "local");
   const download = options.waitForEvent("download");
-  await options.locator("#export-backup").click();
+  await (await show(options, "#export-backup")).click();
   assert.ok(!(await readFile(await (await download).path(), "utf8")).includes(credential), "backup excludes persistent provider keys");
   const web = await context.newPage();
   await web.goto(`http://127.0.0.1:${server.address().port}/source`);
@@ -151,6 +152,7 @@ try {
     return results[0].result;
   }, web.url());
   assert.deepEqual(denied, [true, true], "content scripts cannot read either key storage");
+  await show(options, "#compatible-config");
   for (const colorScheme of ["light", "dark"]) {
     await options.emulateMedia({ colorScheme }); await options.setViewportSize({ width: 320, height: 900 });
     assert.ok(await options.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "model options fit 320px");

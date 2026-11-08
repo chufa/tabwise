@@ -3,154 +3,107 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>TabWise 页面记忆</title>
+    <title>TabWise 工作台</title>
     <link rel="stylesheet" href="sidepanel.css">
     <link rel="stylesheet" href="../shared/workspace-ui.css">
     <link rel="stylesheet" href="context-ui.css">
+    <link rel="stylesheet" href="../shared/interface.css">
   </head>
-  <body>
-    <header class="topbar">
-      <div class="brand-lockup">
-        <span class="brand-mark" aria-hidden="true">TW</span>
-        <div>
-          <h1>TabWise</h1>
-          <p id="state">正在读取页面记忆</p>
+  <body class="panel-surface" data-navigation="sidepanel">
+    <div class="panel-header">
+      <header class="topbar">
+        <div class="brand-lockup">
+          <span class="brand-mark" aria-hidden="true">TW</span>
+          <div><h1>TabWise</h1><p id="state">正在读取页面记忆</p></div>
+        </div>
+        <div class="saved-actions"><button id="open-palette" class="quiet-button" type="button" title="⌘ / Ctrl K">命令</button><button id="settings" class="quiet-button" type="button">设置</button></div>
+      </header>
+      <nav class="surface-tabs" role="tablist" aria-label="工作台导航">
+        <button id="nav-tasks" role="tab" aria-controls="view-tasks" data-view-button="tasks" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5H5v16h14V5h-3M9 3h6v4H9zM8 12h8M8 16h5"/></svg>任务
+        </button>
+        <button id="nav-pages" role="tab" aria-controls="view-pages" data-view-button="pages" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v15H3zM3 9h18M7 7h.01M10 7h.01"/></svg>页面
+        </button>
+        <button id="nav-resources" role="tab" aria-controls="view-resources" data-view-button="resources" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16M6 16v-5M12 16V4M18 16V8"/></svg>资源
+        </button>
+        <button id="nav-history" role="tab" aria-controls="view-history" data-view-button="history" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10a9 9 0 1 1 2 8M3 4v6h6M12 7v5l3 2"/></svg>记录
+        </button>
+      </nav>
+    </div>
+    <main>
+      <section id="restore-preview" class="saved-tools restore-preview" hidden aria-label="恢复预览"></section>
+      <div id="view-tasks" class="surface-view" role="tabpanel" aria-labelledby="nav-tasks" data-view="tasks">
+        <section id="context-memory" class="saved-tools" aria-label="任务记忆"></section>
+        <p class="surface-footnote">任务记忆仅在本机保存。页面恢复与 AI 生成均由你主动发起。</p>
+      </div>
+      <div id="view-pages" class="surface-view" role="tabpanel" aria-labelledby="nav-pages" data-view="pages" hidden>
+        <div class="view-intro"><h2>找回与整理页面</h2><p>从打开的页面、工作区和本地记录中继续。</p></div>
+        <div data-navigation="pages">
+          <nav class="sub-tabs" role="tablist" aria-label="页面工具">
+            <button id="nav-find" role="tab" aria-controls="view-find" data-view-button="find" type="button">查找页面</button>
+            <button id="nav-workspaces" role="tab" aria-controls="view-workspaces" data-view-button="workspaces" type="button">工作区</button>
+            <button id="nav-organize" role="tab" aria-controls="view-organize" data-view-button="organize" type="button">AI 整理</button>
+          </nav>
+          <section id="view-find" role="tabpanel" aria-labelledby="nav-find" data-view="find">
+            <label class="search-field" for="page-search"><span class="visually-hidden">查找页面</span>
+              <input id="page-search" type="search" autocomplete="off" placeholder="搜索标题、网站或之前保存的页面">
+            </label>
+            <details class="saved-tools tool-disclosure"><summary>筛选搜索范围</summary><div class="search-filters">
+              <label>来源<select id="search-source"><option value="all">全部来源</option><option value="open">打开页面</option><option value="suspended">休眠记录</option><option value="workspace">工作区</option><option value="checkpoint">恢复点</option><option value="closed">最近关闭</option></select></label>
+              <label>状态<select id="search-status"><option value="all">全部状态</option><option value="open">已打开</option><option value="protected">已保护</option><option value="suspended">休眠中</option><option value="saved">已保存</option></select></label>
+              <label>窗口<select id="search-window"><option value="">全部窗口</option></select></label>
+              <label>工作区<select id="search-workspace"><option value="">全部工作区</option></select></label>
+            </div></details>
+            <p id="search-hint" class="hint">支持中文、拼音和英文纠错。相同网址合并展示，搜索仅在本地进行。</p>
+            <div id="search-results" class="results empty-state">输入关键词，找回之前看过的页面。</div>
+          </section>
+          <section id="view-workspaces" role="tabpanel" aria-labelledby="nav-workspaces" data-view="workspaces" hidden>
+            <div class="section-heading"><h2>保存的工作区</h2><button id="save-workspace" class="action-button" type="button">保存当前窗口</button></div>
+            <form id="save-workspace-form" class="saved-tools" hidden><label>工作区名称<input name="name" maxlength="80" required placeholder="例如：本周调研"></label><div class="saved-actions"><button type="submit" class="primary-button">保存窗口</button><button id="cancel-workspace" type="button">取消</button></div></form>
+            <p class="hint">保存一组页面，下次按需恢复。可编辑成员或合并多个工作区。</p>
+            <div id="workspace-manager" class="saved-tools"></div>
+          </section>
+          <section id="view-organize" role="tabpanel" aria-labelledby="nav-organize" data-view="organize" hidden>
+            <div class="section-heading"><h2>AI 主题整理</h2><span id="ai-status">未运行</span></div>
+            <p class="hint">选择页面，核对输入，再生成可编辑的主题建议。</p>
+            <ol class="flow-steps" aria-label="AI 整理步骤"><li>选择范围</li><li>预览输入</li><li>审阅并应用</li></ol>
+            <label class="ai-request-field" for="ai-scope"><span>分析范围</span><select id="ai-scope"><option value="current">当前窗口</option><option value="workspace">已保存工作区</option><option value="selected">手动勾选页面</option></select></label>
+            <label id="ai-workspace-field" class="ai-request-field" for="ai-workspace" hidden><span>选择工作区</span><select id="ai-workspace"></select></label>
+            <fieldset id="ai-selection" hidden><legend>选择页面（最多 20 页）</legend><div id="ai-tab-options" class="ai-page-list"></div></fieldset>
+            <label class="ai-request-field" for="ai-request"><span>希望整理什么？</span><input id="ai-request" maxlength="240" placeholder="例如：按研究主题分组"></label>
+            <div class="ai-actions"><button id="preview-ai-input" class="action-button primary-button" type="button">预览分析输入</button><button id="refresh-ai-sources" class="quiet-button" type="button">刷新页面列表</button></div>
+            <div id="ai-input-preview" hidden><p id="ai-input-summary" class="hint"></p><div id="ai-input-pages" class="ai-page-list"></div><p class="hint">仅发送以上标题、域名、状态和整理目标，不含网址路径或正文。预览 10 分钟有效。</p></div>
+            <div class="ai-actions"><button id="generate-ai-brief" class="action-button primary-button" type="button" disabled>生成主题建议</button><button id="stop-ai" class="quiet-button" type="button" hidden>停止生成</button></div>
+            <div id="ai-brief" class="ai-brief empty-state" role="status">预览输入后即可生成。建立标签组或保存工作区前，会再次请你确认。</div>
+            <details class="tool-disclosure"><summary>缓存与输入说明</summary><p class="hint">建议缓存 5 分钟，仅用于当前浏览器会话；再次使用前校验页面状态。生成不会操作标签页。</p><button id="clear-ai-cache" class="quiet-button" type="button">清空建议缓存</button></details>
+          </section>
         </div>
       </div>
-      <div class="saved-actions"><button id="open-palette" class="quiet-button" type="button" title="⌘ / Ctrl K">命令</button><button id="settings" class="quiet-button" type="button">设置</button></div>
-    </header>
-
-    <main>
-      <section id="context-memory" class="saved-tools" aria-label="任务记忆"></section>
-      <dl class="overview" aria-label="当前标签概览">
-        <div><dt>可休眠</dt><dd id="overview-eligible">-</dd></div>
-        <div><dt>休眠中</dt><dd id="overview-suspended">-</dd></div>
-        <div><dt>JS 堆</dt><dd id="overview-heap">-</dd></div>
-      </dl>
-      <section class="saved-tools" aria-label="休眠效果统计">
-        <div class="section-heading"><h2>休眠效果</h2></div>
-        <p id="effects" class="hint">正在读取本地记录。</p>
-        <p id="backup-reminder" class="hint" hidden></p>
-      </section>
-      <section class="saved-tools" aria-label="扩展健康状态">
-        <div class="section-heading"><h2>健康状态</h2></div>
-        <div id="health" class="health-list">正在检查本地存储与任务状态。</div>
-      </section>
-      <section class="saved-tools" aria-label="标签生命周期">
-        <div class="section-heading"><h2>标签生命周期</h2></div>
-        <p class="hint">仅展示本地状态，不会恢复、关闭或移动任何页面。</p>
-        <div id="lifecycle" class="lifecycle-list">正在读取状态。</div>
-      </section>
-      <label class="search-field" for="page-search">
-        <span>查找页面</span>
-        <input id="page-search" type="search" autocomplete="off" placeholder="例如：上周 React 性能文章">
-      </label>
-      <details class="saved-tools"><summary>搜索范围</summary><div class="search-filters">
-        <label>来源<select id="search-source"><option value="all">全部来源</option><option value="open">打开页面</option><option value="suspended">休眠记录</option><option value="workspace">工作区</option><option value="checkpoint">恢复点</option><option value="closed">最近关闭</option></select></label>
-        <label>状态<select id="search-status"><option value="all">全部状态</option><option value="open">已打开</option><option value="protected">已保护</option><option value="suspended">休眠中</option><option value="saved">已保存</option></select></label>
-        <label>窗口<select id="search-window"><option value="">全部窗口</option></select></label>
-        <label>工作区<select id="search-workspace"><option value="">全部工作区</option></select></label>
-      </div></details>
-      <p id="search-hint" class="hint">支持中文分词、拼音和英文纠错；相同网址合并展示全部来源，数据只在本地处理。</p>
-      <div id="search-results" class="results empty-state">输入关键词开始查找。</div>
-      <section id="restore-preview" class="saved-tools restore-preview" hidden aria-label="恢复预览"></section>
-      <section id="restore-tasks" class="saved-tools" aria-label="恢复任务中心"></section>
-      <section id="resource-budget" class="saved-tools" aria-label="资源预算"></section>
-      <section id="session-tools" class="saved-tools session-tools" aria-label="会话找回"></section>
-
-      <section class="section">
-        <div class="section-heading"><h2>工作区</h2><button id="save-workspace" class="quiet-button" type="button">保存当前窗口</button></div>
-        <form id="save-workspace-form" class="saved-tools" hidden><label>工作区名称<input name="name" maxlength="80" required placeholder="例如：本周调研"></label><div class="saved-actions"><button type="submit">保存窗口</button></div></form>
-        <p class="hint">选择页面恢复、编辑成员；勾选多个工作区后可合并。</p>
-        <div id="workspace-manager" class="saved-tools"></div>
-      </section>
-
-      <section class="section">
-        <div class="section-heading">
-          <h2>可安全休眠</h2>
-          <span id="candidate-count"></span>
-        </div>
-        <p id="reclaim-summary" class="hint">仅显示已经通过当前保护策略和闲置阈值检查的页面。</p>
-        <div id="candidates" class="results empty-state">正在评估标签页状态。</div>
-      </section>
-
-      <section class="section">
-        <div class="section-heading">
-          <h2>资源诊断</h2>
-          <button id="measure-resources" class="quiet-button" type="button">立即更新</button>
-        </div>
-        <p id="sampling-coverage" class="hint">每分钟轮转采样最多 25 个网页，最多 4 个同时测量；立即更新可测量全部网页。</p>
-        <div id="renderer-diagnostics" class="results empty-state">按需测量当前网页的内存。</div>
-      </section>
-
-      <section class="section">
-        <div class="section-heading">
-          <h2>定时资源巡检</h2>
-          <button id="run-resource-review" class="quiet-button" type="button">立即巡检</button>
-        </div>
-        <p id="review-schedule" class="hint">每天巡检会保存恢复点并记录资源建议，不会自动休眠页面。</p>
-        <div id="resource-reviews" class="timeline empty-state">暂无资源巡检记录。</div>
-      </section>
-
-      <section class="section">
-        <div class="section-heading">
-          <h2>AI 主题整理</h2>
-          <span id="ai-status">未运行</span>
-        </div>
-        <p class="hint">先选择范围、核对接收方与输入，再生成带成员和依据的主题建议。仅发送预览中的标题、域名、状态和整理目标。</p>
-        <label class="ai-request-field" for="ai-scope">
-          <span>分析范围</span>
-          <select id="ai-scope">
-            <option value="current">当前窗口</option>
-            <option value="workspace">已保存工作区</option>
-            <option value="selected">手动勾选页面</option>
-          </select>
-        </label>
-        <label id="ai-workspace-field" class="ai-request-field" for="ai-workspace" hidden>
-          <span>选择工作区</span>
-          <select id="ai-workspace"></select>
-        </label>
-        <fieldset id="ai-selection" hidden>
-          <legend>选择页面（最多 20 页）</legend>
-          <div id="ai-tab-options" class="ai-page-list"></div>
-        </fieldset>
-        <label class="ai-request-field" for="ai-request">
-          <span>希望整理什么？</span>
-          <input id="ai-request" maxlength="240" placeholder="例如：按研究主题分组">
-        </label>
-        <div class="ai-actions">
-          <button id="preview-ai-input" class="action-button" type="button">预览分析输入</button>
-          <button id="refresh-ai-sources" class="quiet-button" type="button">刷新页面列表</button>
-        </div>
-        <div id="ai-input-preview" hidden>
-          <p id="ai-input-summary" class="hint"></p>
-          <div id="ai-input-pages" class="ai-page-list"></div>
-          <p class="hint">以上为完整页面输入，不含 URL 路径、正文或表单。快照 10 分钟有效；生成不会操作标签页。</p>
-        </div>
-        <div class="ai-actions">
-          <button id="generate-ai-brief" class="action-button" type="button" disabled>生成主题建议</button>
-          <button id="stop-ai" class="quiet-button" type="button" hidden>停止生成</button>
-          <button id="clear-ai-cache" class="quiet-button" type="button">清空建议缓存</button>
-        </div>
-        <p class="hint">相同输入的建议缓存 5 分钟，仅用于当前浏览器会话；再次使用前会校验页面状态。</p>
-        <div id="ai-brief" class="ai-brief empty-state" role="status">预览输入后即可生成；你可以修改主题名和成员，再确认分组或保存。</div>
-      </section>
-
-      <section class="section">
-        <div class="section-heading"><h2>最近操作与撤销</h2></div>
-        <p class="hint">保留本次浏览器会话最近 20 次操作。撤销分组会恢复原分组与顺序；状态已变化的项会跳过。</p>
-        <div id="operations" class="timeline empty-state">正在读取操作记录。</div>
-      </section>
-
-      <section class="section">
-        <div class="section-heading">
-          <h2>页面时间线</h2>
-          <button id="save-checkpoint" class="quiet-button" type="button">保存恢复点</button>
-        </div>
-        <div id="timeline" class="timeline empty-state">正在读取本地恢复记录。</div>
-      </section>
+      <div id="view-resources" class="surface-view" role="tabpanel" aria-labelledby="nav-resources" data-view="resources" hidden>
+        <div class="view-intro"><h2>减少浏览器负担</h2><p>先看安全候选，需要时再查看详细诊断。</p></div>
+        <dl class="overview" aria-label="当前标签概览"><div><dt>可休眠</dt><dd id="overview-eligible">-</dd></div><div><dt>休眠中</dt><dd id="overview-suspended">-</dd></div><div><dt>JS 堆估算</dt><dd id="overview-heap">-</dd></div></dl>
+        <section id="resource-budget" class="saved-tools" aria-label="资源预算"></section>
+        <section class="section"><div class="section-heading"><h2>可安全休眠</h2><span id="candidate-count"></span></div><p id="reclaim-summary" class="hint">仅显示通过保护策略和闲置阈值检查的页面。</p><div id="candidates" class="results empty-state">正在评估标签页状态。</div></section>
+        <details class="section tool-disclosure" open><summary>资源诊断</summary><div class="section-heading"><h2 class="visually-hidden">资源诊断</h2><button id="measure-resources" class="quiet-button" type="button">立即更新</button></div><p id="sampling-coverage" class="hint">按需测量网页内存。</p><div id="renderer-diagnostics" class="results empty-state">点击“立即更新”测量当前网页的内存。</div></details>
+        <details class="section tool-disclosure"><summary>巡检与休眠效果</summary>
+          <div class="section-heading"><h2>定时资源巡检</h2><button id="run-resource-review" class="quiet-button" type="button">立即巡检</button></div><p id="review-schedule" class="hint"></p><div id="resource-reviews" class="timeline empty-state">暂无资源巡检记录。</div>
+          <section class="saved-tools"><h2>休眠效果</h2><p id="effects" class="hint">正在读取本地记录。</p></section>
+          <section class="saved-tools"><h2>标签生命周期</h2><div id="lifecycle" class="lifecycle-list">正在读取状态。</div></section>
+        </details>
+      </div>
+      <div id="view-history" class="surface-view" role="tabpanel" aria-labelledby="nav-history" data-view="history" hidden>
+        <div class="view-intro"><h2>恢复与操作记录</h2><p>查看任务进度、找回页面或撤销最近操作。</p></div>
+        <section id="restore-tasks" class="saved-tools" aria-label="恢复任务中心"></section>
+        <section id="session-tools" class="saved-tools session-tools" aria-label="会话找回"></section>
+        <section class="section"><div class="section-heading"><h2>最近操作与撤销</h2></div><p class="hint">保留本次会话最近 20 次操作。状态已变化的项会跳过。</p><div id="operations" class="timeline empty-state">正在读取操作记录。</div></section>
+        <section class="section"><div class="section-heading"><h2>页面时间线</h2><button id="save-checkpoint" class="quiet-button" type="button">保存恢复点</button></div><div id="timeline" class="timeline empty-state">正在读取本地恢复记录。</div></section>
+        <details class="section tool-disclosure"><summary>本地存储与健康状态</summary><div id="health" class="health-list">正在检查本地存储与任务状态。</div><p id="backup-reminder" class="hint" hidden></p></details>
+      </div>
     </main>
-    <p id="feedback" class="feedback" role="status"></p>
+    <p id="feedback" class="feedback floating-feedback" role="status" aria-live="polite"></p>
     <script type="module" src="sidepanel.js"></script>
   </body>
 </html>

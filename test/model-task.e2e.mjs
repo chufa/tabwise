@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { show } from "./ui-navigation.mjs";
 
 // Runs the same task through either a real model or an explicit protocol fixture.
 export async function verifyModelTask(control, { label, artifacts, context }) {
   const send = (type, fields = {}) => control.evaluate(({ type, fields }) => chrome.runtime.sendMessage({ type, ...fields }), { type, fields });
   const memory = control.locator("#context-memory"), form = memory.locator(".context-form");
+  await show(control, "#context-memory");
   await control.evaluate(async () => {
     const { workspaces = [] } = await chrome.storage.local.get("workspaces");
     await chrome.storage.local.set({ workspaces: [{ id: "model-source", name: "模型验证资料", tabs: [
@@ -21,7 +23,7 @@ export async function verifyModelTask(control, { label, artifacts, context }) {
   await form.locator('[name="nextSteps"]').fill("用合成页面记录恢复前后的请求次数。");
   await form.getByRole("button", { name: "创建任务", exact: true }).click();
   await memory.locator(".context-notice").filter({ hasText: "已保存在本地" }).waitFor();
-  await memory.getByRole("button", { name: "选择资料加入任务", exact: true }).click();
+  await (await show(control, '[data-context="sources"]')).click();
   const picker = memory.locator(".context-picker");
   await picker.locator("[data-source-kind]").selectOption("workspace");
   await picker.locator("[data-source-workspace]").selectOption("model-source");
@@ -35,6 +37,7 @@ export async function verifyModelTask(control, { label, artifacts, context }) {
   await form.getByRole("button", { name: "保存进度", exact: true }).click();
   await memory.locator(".context-notice").filter({ hasText: "已保存在本地" }).waitFor();
   await source.locator("[data-model-source]").check();
+  await show(control, '[data-context="preview"]');
   const before = (await send("getDashboard")).tabs.length;
   await memory.getByRole("button", { name: "预览续接输入", exact: true }).click();
   await memory.locator(".context-preview").filter({ hasText: label }).waitFor();
@@ -49,12 +52,13 @@ export async function verifyModelTask(control, { label, artifacts, context }) {
   await memory.locator('.context-draft [name="summary"]').fill("用户审阅：继续核对两种恢复方式，并记录合成页面请求次数。");
   await memory.locator("[data-adopt-confirm]").check();
   await memory.getByRole("button", { name: "确认采纳草稿", exact: true }).click();
+  await show(control, ".context-accepted");
   await memory.locator(".context-accepted").filter({ hasText: "用户审阅" }).waitFor();
   const task = (await send("listContextTasks")).tasks.find((item) => item.name === `${label} 真实链路验证`);
   assert.equal(task.acceptedBrief.summary, "用户审阅：继续核对两种恢复方式，并记录合成页面请求次数。");
   assert.equal(task.confirmedNotes, "用户确认：所有页面都是合成测试资料，恢复验证仍待执行。");
   const download = control.waitForEvent("download");
-  await memory.getByRole("button", { name: "下载 Markdown", exact: true }).click();
+  await (await show(control, '[data-context="markdown"]')).click();
   const text = await readFile(await (await download).path(), "utf8");
   assert.ok(text.includes("synthetic-private"));
   assert.ok(text.includes("用户审阅"));

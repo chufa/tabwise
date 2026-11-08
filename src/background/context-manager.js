@@ -3,6 +3,7 @@ import { createContextTask, updateContextTask, normalizeContextSource, normalize
 import { buildContextInput, buildContextPrompt, CONTEXT_BRIEF_SCHEMA, validateContextBrief, adoptContextBrief } from "../shared/task-context-ai.js";
 import { buildOllamaRequest } from "../shared/ollama.js";
 import { modelRecipient, sameModel } from "../shared/ai-provider.js";
+import { isExtensionPage } from "../shared/extension-page.js";
 
 export const CONTEXT_COMMANDS = new Set(["listContextTasks", "createContextTask", "updateContextTask", "deleteContextTask",
   "resumeContextTask", "prepareContextSources", "attachContextSources", "prepareContextBrief", "beginContextBrief",
@@ -27,7 +28,7 @@ export function createContextManager({ getTabs, getWindowId, getWorkspaces, getS
   // Drafts belong to the currently open document. Restart always invalidates them.
   const snapshots = new Map();
   const authorize = (sender) => {
-    if (sender?.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL("src/sidepanel/sidepanel.html") || !sender.documentId) {
+    if (!isExtensionPage(sender, "src/sidepanel/sidepanel.html") || !sender.documentId) {
       throw new Error("任务记忆仅可从 TabWise 侧栏操作。");
     }
   };

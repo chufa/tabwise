@@ -4,6 +4,10 @@
 
 ### Features
 
+- Reorganize the workbench into Tasks, Pages, Resources and History with focused page tools and persistent drafts across navigation.
+- Split task editing into progress, sources and AI continuation; add local task search and preserve selected sources after saving notes.
+- Keep popup tab search and quick actions separate from organizing/saved tools, and group settings into five task-oriented categories.
+- Reveal advanced workspace filters/actions, statistics and operating explanations on demand; unify theme tokens, focus states and responsive layouts.
 - Add a shared real-model adapter for task continuation and theme organization, supporting loopback Ollama and HTTPS OpenAI-compatible Chat Completions.
 - Allow user-supplied service/model configuration, model listing, synthetic JSON self-checks and optional JSON mode; ship no endpoint/model presets.
 - Store endpoint-bound BYOK credentials separately in trusted session storage by default, with explicit unencrypted local persistence and clearing.
@@ -22,6 +26,10 @@
 
 ### Reliability
 
+- Fix toolbar popup intrinsic sizing: remove the viewport-relative body maximum, keep the 410px width and 600px height cap, and prevent header/navigation wrapping.
+- Resolve omitted native-popup sender document IDs from the unique browser-reported POPUP context; retain document-bound previews and reject stale previews after reopening.
+- Reveal the destination before executing palette commands, discard stale search commands immediately, and locate invalid fields across hidden settings/task steps.
+- Accept view fragments only on the exact trusted extension document while preserving origin/path/query and document-ownership checks.
 - Invalidate model previews and theme cache on provider, endpoint, model, JSON mode or credential revision changes.
 - Bound model response sizes and output budgets, abort cancelled/time-limited requests, reject truncation, and never echo provider error bodies or retry paid requests automatically.
 - Redact embedded URLs, email addresses and common credentials in theme titles/goals while retaining original local browser identities; prevent settings edits until initial state is loaded.
@@ -38,6 +46,8 @@
 
 ### Tests
 
+- Exercise actual action popup targets with native pointer/keyboard events in Chromium and Edge, including layout, search, filters, batch previews, command routing, workspace saves and close/reopen ownership.
+- Add real Chromium/Edge UI checks for view transitions, draft/search retention, keyboard focus, hidden-field validation and all routes in light/dark narrow/desktop layouts.
 - Add compatible API browser coverage for task/theme generation, HTTP errors, cancellation, credential access, backup exclusion and session/local restart behavior.
 - Extend isolated Ollama validation from a JSON probe to a cited continuation task with edited adoption and Markdown export.
 - Cover task persistence, scoped source revalidation, provider/schema checks, late result rejection, storage failure, dirty edits, local exports and selected task restoration in Chromium and Edge.

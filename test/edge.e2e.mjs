@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { chromium } from "playwright";
 import { verifyContextMemory } from "./context-memory.e2e.mjs";
+import { show } from "./ui-navigation.mjs";
 
 const profile = await mkdtemp(path.join(os.tmpdir(), "tabwise-edge-"));
 const hits = new Map();
@@ -48,10 +49,12 @@ try {
   assert.equal(hits.get("/edge-lazy") || 0, before);
   const popup = await context.newPage();
   await popup.goto(`${extensionUrl}/src/popup/popup.html`);
+  await show(popup, ".saved-workspace");
   await popup.locator('.saved-workspace[data-key="edge"]').waitFor();
   const options = await context.newPage();
   await options.goto(`${extensionUrl}/src/options/options.html`);
-  await options.locator("#resource-sampling-mode").waitFor();
+  await options.locator('#settings-form[aria-busy="false"]').waitFor();
+  await show(options, "#sync-metadata");
   await options.locator("#sync-metadata").click();
   await options.waitForFunction(() => !document.querySelector("#sync-metadata").disabled);
   assert.equal(await options.locator("#sync-preview").isVisible(), true, await options.locator("#sync-feedback").textContent());

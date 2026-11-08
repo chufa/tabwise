@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { show } from "./ui-navigation.mjs";
 
 export async function verifyReliability({ context, control, fixture, extensionUrl, message, waitForBrowserState, waitForWorker }) {
   const originalSettings = await control.evaluate(() => chrome.storage.local.get("settings")).then((state) => state.settings);
@@ -14,6 +15,7 @@ export async function verifyReliability({ context, control, fixture, extensionUr
     await chrome.storage.local.set({ workspaces: [item, ...workspaces.filter((workspace) => workspace.id !== item.id)].slice(0, 20) });
   }, source);
   await control.reload();
+  await show(control, ".workspace-favorites");
   await control.locator(".workspace-favorites").getByRole("button", { name: "★ 可靠性预设", exact: true }).click();
   assert.equal(await control.locator(".restore-load-mode").inputValue(), "on-demand");
   assert.equal(await control.locator(".restore-concurrency").inputValue(), "2");
@@ -123,7 +125,7 @@ export async function verifyReliability({ context, control, fixture, extensionUr
   // Actual extension-page UI verifies selected synchronization and stale-preview rejection.
   const options = await context.newPage();
   await options.goto(`${extensionUrl}/src/options/options.html`);
-  await options.locator("#sync-metadata").click();
+  await (await show(options, "#sync-metadata")).click();
   await options.waitForFunction(() => !document.querySelector("#sync-metadata").disabled);
   assert.equal(await options.locator("#sync-preview").isVisible(), true, await options.locator("#sync-feedback").textContent());
   for (const checkbox of await options.locator("[data-sync-workspace]").all()) await checkbox.uncheck();

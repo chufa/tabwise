@@ -8,8 +8,13 @@ import { createPagedList } from "../shared/paged-ui.js";
 import { createBatchUI } from "../shared/batch-ui.js";
 import { createPalette } from "../shared/palette.js";
 import { createContextUI } from "./context-ui.js";
+import { createNavigation, revealElement } from "../shared/navigation.js";
+import { createFeedback } from "../shared/feedback.js";
 
 const $ = (selector) => document.querySelector(selector);
+const feedbackUI = createFeedback($("#feedback"));
+createNavigation(document.body, { hash: true });
+createNavigation(document.querySelector('[data-navigation="pages"]'));
 let searchTimer;
 let searchVersion = 0;
 let dashboard;
@@ -79,9 +84,7 @@ function relativeTime(timestamp) {
 }
 
 function setFeedback(message = "", isError = false) {
-  const feedback = $("#feedback");
-  feedback.textContent = message;
-  feedback.classList.toggle("is-error", isError);
+  feedbackUI(message, isError);
 }
 function renderLifecycle(items = []) {
   const effects = dashboard.effects || {};
@@ -132,10 +135,12 @@ function candidateRow(candidate) {
       <span>${escapeHtml([candidate.explanation, candidate.estimatedJSHeap ? `预计释放 ${formatMemory(candidate.estimatedJSHeap)}` : ""].filter(Boolean).join(" · "))}</span>
     </div>
     <div class="candidate-actions">
-      <button class="quiet-button" data-action="focus-candidate" data-tab-id="${tab.id}" type="button">详情</button>
       <button class="action-button" data-action="suspend" data-tab-id="${tab.id}" type="button">休眠</button>
-      <button class="quiet-button" data-action="protect-hour" data-tab-id="${tab.id}" type="button">保护 1 小时</button>
-      <button class="quiet-button" data-action="protect-session" data-tab-id="${tab.id}" type="button">会话保护</button>
+      <details class="candidate-more"><summary>更多操作</summary><div class="saved-actions">
+        <button class="quiet-button" data-action="focus-candidate" data-tab-id="${tab.id}" type="button">查看页面</button>
+        <button class="quiet-button" data-action="protect-hour" data-tab-id="${tab.id}" type="button">保护 1 小时</button>
+        <button class="quiet-button" data-action="protect-session" data-tab-id="${tab.id}" type="button">会话保护</button>
+      </div></details>
     </div>
   </article>`;
 }
@@ -318,8 +323,19 @@ document.body.addEventListener("click", async (event) => {
 });
 
 $("#save-workspace").addEventListener("click", () => {
+  revealElement($("#save-workspace"));
   $("#save-workspace-form").hidden = !$("#save-workspace-form").hidden;
   if (!$("#save-workspace-form").hidden) $("#save-workspace-form input").focus();
+});
+$("#cancel-workspace").addEventListener("click", () => {
+  $("#save-workspace-form").hidden = true;
+  $("#save-workspace").focus();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey
+    && !event.target.closest("input, textarea, select, [contenteditable], dialog")) {
+    event.preventDefault(); revealElement($("#page-search"), { focus: true });
+  }
 });
 $("#save-workspace-form").addEventListener("submit", async (event) => {
   event.preventDefault();

@@ -7,8 +7,12 @@ import { createTaskUI } from "../shared/task-ui.js";
 import { createBudgetUI } from "../shared/budget-ui.js";
 import { createBatchUI } from "../shared/batch-ui.js";
 import { createPalette } from "../shared/palette.js";
+import { createNavigation, revealElement } from "../shared/navigation.js";
+import { createFeedback } from "../shared/feedback.js";
 
 const $ = (selector) => document.querySelector(selector);
+const feedbackUI = createFeedback($("#action-feedback"));
+createNavigation(document.body, { initial: "tabs" });
 const state = { data: null, filter: "all", sort: "recent", search: "", workspaceSearch: "", workspaces: [], recent: [], checkpoints: [], expandedSuggestions: new Set(), tabMessages: new Map() };
 let tabPage = 0;
 let tabAnchor;
@@ -101,9 +105,7 @@ async function send(message) {
 }
 
 function setFeedback(message = "", isError = false) {
-  const feedback = $("#action-feedback");
-  feedback.textContent = message;
-  feedback.classList.toggle("is-error", isError);
+  feedbackUI(message, isError);
 }
 
 function renderAutomationState(settings) {
@@ -377,12 +379,18 @@ document.querySelector(".filter-bar").addEventListener("click", (event) => {
   state.filter = filter.dataset.filter;
   tabPage = 0; tabAnchor = undefined;
   document.querySelectorAll("[data-filter]").forEach((item) => item.classList.toggle("is-active", item === filter));
+  document.querySelectorAll("[data-filter]").forEach((item) => item.setAttribute("aria-pressed", String(item === filter)));
   renderTabs();
 });
 $("#toggle-workspace-form").addEventListener("click", () => {
+  revealElement($("#toggle-workspace-form"));
   const form = $("#workspace-form");
   form.hidden = !form.hidden;
   if (!form.hidden) $("#workspace-name").focus();
+});
+$("#cancel-workspace").addEventListener("click", () => {
+  $("#workspace-form").hidden = true;
+  $("#toggle-workspace-form").focus();
 });
 $("#workspace-form").addEventListener("submit", async (event) => {
   event.preventDefault();

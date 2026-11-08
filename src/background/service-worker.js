@@ -4,6 +4,7 @@ import { addRecentSuspension, addRecoveryCheckpoint, addWorkspace, applySyncMeta
 import { buildSuspendCandidate, createPageIndex } from "../shared/search.js";
 import { summarizeHeapSnapshots } from "../shared/resource.js";
 import { buildResourceReclaimPlan } from "../shared/insights.js";
+import { isExtensionPage, resolvePopupSender } from "../shared/extension-page.js";
 import { AI_PLAN_SCHEMA, buildAiThemePrompt, publicAiSnapshot, selectAiPages, validateAiMembers, validateAiName, validateAiPlan } from "../shared/ai-analysis.js";
 import { buildOllamaRequest, normalizeOllamaEndpoint, normalizeOllamaModel, ollamaCapability, OLLAMA_PROBE_SCHEMA, validateOllamaProbe } from "../shared/ollama.js";
 import { buildResourceReview, findStaleWorkspaces, nextReviewAt } from "../shared/review.js";
@@ -1242,15 +1243,15 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 chrome.runtime.onConnect.addListener((port) => {
   const sender = port.sender;
-  if (port.name === "tabwise-live" && sender?.id === chrome.runtime.id
-    && [chrome.runtime.getURL("src/sidepanel/sidepanel.html"), chrome.runtime.getURL("src/popup/popup.html")].includes(sender.url)) {
+  if (port.name === "tabwise-live"
+    && ["src/sidepanel/sidepanel.html", "src/popup/popup.html"].some((path) => isExtensionPage(sender, path))) {
     livePorts.add(port);
     port.onDisconnect.addListener(() => livePorts.delete(port));
     pageTracker.initialize().catch(console.error);
     return;
   }
-  if (!["tabwise-ai", "tabwise-context-ai"].includes(port.name) || sender?.id !== chrome.runtime.id
-    || sender.url !== chrome.runtime.getURL("src/sidepanel/sidepanel.html") || !sender.documentId) return;
+  if (!["tabwise-ai", "tabwise-context-ai"].includes(port.name)
+    || !isExtensionPage(sender, "src/sidepanel/sidepanel.html") || !sender.documentId) return;
   let snapshotId;
   port.onMessage.addListener((message) => { if (typeof message.snapshotId === "string") snapshotId = message.snapshotId; });
   port.onDisconnect.addListener(() => {
@@ -1259,13 +1260,13 @@ chrome.runtime.onConnect.addListener((port) => {
   });
 });
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+function handleMessage(message, sender, sendResponse) {
   if (MODEL_COMMANDS.has(message.type)) {
     modelAccess.handle(message, sender).then(sendResponse).catch((error) => sendResponse({ ok: false, reason: error.message }));
     return true;
   }
   if (message.type === "prepareRestore" && message.kind === "context"
-    && (sender?.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL("src/sidepanel/sidepanel.html") || !sender.documentId)) {
+    && (!isExtensionPage(sender, "src/sidepanel/sidepanel.html") || !sender.documentId)) {
     sendResponse({ ok: false, reason: "任务资料恢复仅可从 TabWise 侧栏操作。" }); return false;
   }
   if (CONTEXT_COMMANDS.has(message.type)) {
@@ -1282,7 +1283,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     applyAiGroup: () => applyAiGroup(message, sender)
   };
   if (Object.hasOwn(aiTasks, message.type)) {
-    if (sender.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL("src/sidepanel/sidepanel.html") || !sender.documentId) {
+    if (!isExtensionPage(sender, "src/sidepanel/sidepanel.html") || !sender.documentId) {
       sendResponse({ ok: false, reason: "AI 整理仅可从 TabWise 侧栏操作。" });
       return false;
     }
@@ -1472,4 +1473,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!task) return false;
   task().then(sendResponse).catch((error) => sendResponse({ ok: false, reason: error.message }));
   return true;
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!sender?.documentId && isExtensionPage(sender, "src/popup/popup.html")) {
+    resolvePopupSender(sender).then((resolved) => handleMessage(message, resolved, sendResponse))
+      .catch((error) => sendResponse({ ok: false, reason: error.message }));
+    return true;
+  }
+  return handleMessage(message, sender, sendResponse);
 });

@@ -11,6 +11,7 @@ import { verifyEnhancements } from "./enhancements.e2e.mjs";
 import { verifyPriorities, prepareRestart, verifyRestart } from "./priorities.e2e.mjs";
 import { verifyReliability } from "./reliability.e2e.mjs";
 import { verifyContextMemory, verifyContextRestart } from "./context-memory.e2e.mjs";
+import { show } from "./ui-navigation.mjs";
 
 const extensionPath = path.resolve(".");
 const failureDirectory = await mkdtemp(path.join(os.tmpdir(), "tabwise-failure-"));
@@ -175,6 +176,7 @@ try {
   const extensionUrl = `chrome-extension://${extensionId}`;
   const control = await context.newPage();
   await control.goto(`${extensionUrl}/src/sidepanel/sidepanel.html`);
+  await show(control, "#generate-ai-brief");
   await control.getByRole("button", { name: "生成主题建议" }).waitFor();
 
   const alpha = await context.newPage();
@@ -409,18 +411,18 @@ try {
   assert.equal(grouped.ok, true, "same-window fixture pages should group");
   assert.equal(grouped.count, 2, "grouping should include both requested tabs");
 
-  await control.getByLabel("查找页面").fill("react perf");
+  await (await show(control, "#page-search")).fill("react perf");
   await control.getByText("react-performance", { exact: false }).first().waitFor();
   const settingsPage = context.waitForEvent("page");
   await control.getByRole("button", { name: "设置" }).click();
   const settings = await settingsPage;
-  await settings.waitForURL(/\/src\/options\/options\.html$/);
-  await settings.getByLabel("扩展技术术语的本地关联").check();
-  await settings.getByLabel("每天保存恢复点并巡检资源").check();
+  await settings.waitForURL(/\/src\/options\/options\.html(?:#.*)?$/);
+  await (await show(settings, "#semantic-search")).check();
+  await (await show(settings, "#scheduled-review-enabled")).check();
   await settings.getByLabel("运行时间").fill("18:00");
   await settings.getByLabel("归档长期未打开的工作区").check();
   await settings.getByLabel("归档阈值").fill("30");
-  await settings.getByRole("radio", { name: /Ollama/ }).check();
+  await (await show(settings, "#ai-provider-ollama")).check();
   await settings.getByLabel("Ollama 地址").fill(fixture.baseUrl);
   await settings.getByLabel("模型名").fill("fixture:latest");
   await settings.getByRole("button", { name: "模型自检", exact: true }).click();
@@ -439,6 +441,7 @@ try {
 
   await message(control, "updateSettings", { settings: { aiProvider: "browser" } });
   await control.reload();
+  await show(control, "#generate-ai-brief");
   await control.getByRole("button", { name: "预览分析输入" }).click();
   await control.locator("#ai-input-summary").filter({ hasText: "浏览器内置模型" }).waitFor();
   await control.getByRole("button", { name: "生成主题建议" }).click();
@@ -557,7 +560,7 @@ try {
   await control.reload();
   await control.getByLabel("分析范围").selectOption("selected");
   await control.locator("#ai-tab-options label").filter({ hasText: "undo-0" }).getByRole("checkbox").check();
-  await control.getByRole("button", { name: "清空建议缓存" }).click();
+  await (await show(control, "#clear-ai-cache")).click();
   await control.getByRole("button", { name: "预览分析输入" }).click();
   await control.locator("#ai-input-preview").waitFor({ state: "visible" });
   fixture.ai.hold = true;
@@ -669,6 +672,7 @@ try {
   await control.bringToFront();
   await control.reload();
   const preciseRow = control.locator(".saved-workspace").filter({ hasText: "编辑后的工作区" });
+  await show(control, preciseRow);
   await preciseRow.getByRole("button", { name: "选择恢复" }).click();
   await control.locator("#restore-preview").waitFor({ state: "visible" });
   await control.locator("#restore-preview").getByRole("button", { name: "全不选" }).click();
@@ -748,6 +752,7 @@ try {
   const contextMemory = await verifyContextMemory({ context, control, fixture, extensionUrl });
   if (process.env.TABWISE_E2E_ARTIFACT_DIR) {
     await control.reload();
+    await show(control, ".operation-item");
     await control.locator(".operation-item").first().waitFor();
     for (const colorScheme of ["light", "dark"]) {
       await control.emulateMedia({ colorScheme });
@@ -755,6 +760,7 @@ try {
       assert.ok(await control.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       await control.screenshot({ path: path.join(process.env.TABWISE_E2E_ARTIFACT_DIR, `operations-${colorScheme}-320.png`), fullPage: true });
       const workspaceSection = control.locator("section").filter({ has: control.locator("#workspace-manager") });
+      await show(control, "#workspace-manager");
       await workspaceSection.screenshot({ path: path.join(process.env.TABWISE_E2E_ARTIFACT_DIR, `workspaces-${colorScheme}-320.png`) });
       await control.locator(".saved-workspace").filter({ hasText: "合并的工作区" }).getByRole("button", { name: "选择恢复" }).click();
       await control.locator("#restore-preview").screenshot({ path: path.join(process.env.TABWISE_E2E_ARTIFACT_DIR, `restore-${colorScheme}-320.png`) });
@@ -768,6 +774,7 @@ try {
     }
     const popupVisual = await context.newPage();
     await popupVisual.goto(`${extensionUrl}/src/popup/popup.html`);
+    await show(popupVisual, ".saved-workspace");
     await popupVisual.locator(".saved-workspace").first().waitFor();
     await popupVisual.setViewportSize({ width: 410, height: 900 });
     for (const colorScheme of ["light", "dark"]) {

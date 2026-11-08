@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { show } from "./ui-navigation.mjs";
 import path from "node:path";
 import { sourceState } from "../src/shared/restoration.js";
 
@@ -69,13 +70,14 @@ export async function verifySession({ context, control, fixture, extensionUrl, m
   assert.ok(exported.payload.workspaces.find((item) => item.name === "导入的会话布局").groups.length);
   // Live UI refresh preserves a workspace draft, page checks, search and focus.
   await control.bringToFront();
+  await show(control, "#workspace-manager");
   await control.locator("#workspace-manager .saved-workspace").first().getByRole("button", { name: "编辑", exact: true }).click();
   const draft = control.locator('.workspace-editor input[name="workspace-name"]');
   await draft.fill("尚未保存的修改");
   const checkbox = control.locator('.workspace-editor .saved-members input[type="checkbox"]').first();
   await checkbox.uncheck();
-  await control.locator("#ai-scope").selectOption("selected");
-  await control.locator("#page-search").fill("session-pin");
+  await (await show(control, "#ai-scope")).selectOption("selected");
+  await (await show(control, "#page-search")).fill("session-pin");
   await control.locator("#search-results .result").first().waitFor();
   const added = await control.evaluate((base) => chrome.tabs.create({ url: `${base}/live-sync-marker`, active: false }), fixture.baseUrl);
   await waitForBrowserState(control, () => [...document.querySelectorAll("#ai-tab-options strong")].some((item) => item.textContent === "live-sync-marker"));
@@ -130,6 +132,7 @@ export async function verifySession({ context, control, fixture, extensionUrl, m
   assert.equal(await control.locator("#search-results").getByText("浏览器性能调研", { exact: true }).count(), 0);
   // Closed metadata survives a worker restart; clear and disable both erase it.
   await control.evaluate((id) => chrome.tabs.remove(id), added.id);
+  await show(control, "#session-tools");
   await control.locator(".session-history > summary").click();
   await control.locator(".closed-list").getByText("live-sync-marker", { exact: true }).waitFor();
   const cdp = await context.newCDPSession(control);
@@ -196,6 +199,7 @@ export async function verifySession({ context, control, fixture, extensionUrl, m
   await waitForBrowserState(popup, () => !document.querySelector("#tabs .row"));
   const settingsPage = await context.newPage();
   await settingsPage.goto(`${extensionUrl}/src/options/options.html`);
+  await show(settingsPage, "#closed-history-enabled");
   await settingsPage.waitForFunction(() => document.querySelector("#closed-history-days").value === "7");
   await settingsPage.locator("#closed-history-enabled").uncheck();
   await settingsPage.locator("#settings-form").getByRole("button", { name: "保存设置", exact: true }).click();
@@ -219,6 +223,7 @@ export async function verifySession({ context, control, fixture, extensionUrl, m
       await popup.emulateMedia({ colorScheme });
       await popup.setViewportSize({ width: 410, height: 900 });
       assert.ok(await popup.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      await show(popup, "#session-tools");
       await popup.locator("#session-tools").screenshot({ path: path.join(process.env.TABWISE_E2E_ARTIFACT_DIR, `popup-session-${colorScheme}-410.png`) });
     }
   }

@@ -3,14 +3,48 @@ import { OLLAMA_PROBE_SCHEMA, validateOllamaProbe } from "../shared/ollama.js";
 import { BACKUP_LIMITS } from "../shared/backup.js";
 import { SITE_RISK_TEMPLATES, applySiteRiskTemplate } from "../shared/policy.js";
 import { parseIdleRules } from "../shared/site-idle.js";
+import { createNavigation, revealElement } from "../shared/navigation.js";
 
 const $ = (selector) => document.querySelector(selector);
+// Group existing settings without recreating controls or changing their save contracts.
+for (const category of ["model", "sleep", "sites", "data", "about"]) {
+  const panel = document.createElement("div");
+  panel.id = `settings-${category}`;
+  panel.dataset.view = category;
+  panel.setAttribute("role", "tabpanel");
+  panel.setAttribute("aria-labelledby", `settings-nav-${category}`);
+  panel.append(...document.querySelectorAll(`[data-setting-category="${category}"]`));
+  $("#settings-form").insertBefore(panel, $("#settings-form .actions"));
+}
+createNavigation(document.body, { hash: true, initial: "model" });
+let saving = false, loaded = false;
+let baseline = new Map();
+const trackedControls = () => [...$("#settings-form").querySelectorAll("input:not([type=file]), textarea, select")]
+  .filter((input) => input.id && !input.closest("#sync-preview, #backup-preview") && !["backup-password", "backup-reminder-days", "site-template", "template-domains", "ollama-model-choice", "compatible-model-choice"].includes(input.id));
+const controlValue = (input) => ["checkbox", "radio"].includes(input.type) ? input.checked : input.value;
+function captureSettings() {
+  baseline = new Map(trackedControls().map((input) => [input.id, controlValue(input)]));
+}
+function showDirty() {
+  if (!loaded || saving) return;
+  const changed = trackedControls().filter((input) => baseline.get(input.id) !== controlValue(input));
+  $("#saved").classList.remove("is-error");
+  $("#saved").textContent = changed.length ? "有未保存的更改" : "设置已保存到本机";
+}
+function saveError(message, input) {
+  $("#saved").textContent = message;
+  $("#saved").classList.add("is-error");
+  if (input) { revealElement(input); input.focus(); }
+}
+$("#settings-form").addEventListener("input", showDirty);
+$("#settings-form").addEventListener("change", showDirty);
 
 function lines(value) {
   return [...new Set(value.split("\n").map((item) => item.trim().toLowerCase()).filter(Boolean))];
 }
 
 async function load() {
+  loaded = false;
   $("#settings-form").inert = true;
   $("#settings-form").setAttribute("aria-busy", "true");
   const settings = await chrome.runtime.sendMessage({ type: "getDashboard" }).then((data) => data.settings);
@@ -46,6 +80,7 @@ async function load() {
   await renderBackupStatus();
   $("#settings-form").inert = false;
   $("#settings-form").setAttribute("aria-busy", "false");
+  loaded = true; captureSettings(); showDirty();
 }
 
 async function renderBackupStatus() {
@@ -80,27 +115,38 @@ async function renderSyncHistory() {
 
 $("#settings-form").addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (saving || !loaded) return;
+  const invalid = trackedControls().find((input) => !input.validity.valid && !input.closest("[hidden]:not([data-view])"));
+  if (invalid) {
+    revealElement(invalid); invalid.reportValidity(); saveError("请检查此项的格式或取值范围。", invalid); return;
+  }
   let siteIdleRules;
   try { siteIdleRules = parseIdleRules($("#site-idle-rules").value); }
-  catch (error) { $("#saved").textContent = error.message; return; }
+  catch (error) { saveError(error.message, $("#site-idle-rules")); return; }
+  saving = true;
+  $("#settings-form").inert = true;
+  const saveButton = $("#settings-form button[type=submit]");
+  saveButton.disabled = true; saveButton.textContent = "正在保存…";
+  $("#saved").textContent = "正在保存设置…";
+  try {
   const mode = document.querySelector('input[name="suspension-mode"]:checked').value;
   const strategy = document.querySelector('input[name="suspension-strategy"]:checked').value;
   const aiProvider = document.querySelector('input[name="ai-provider"]:checked').value;
   if (mode === "smart") {
     const granted = await chrome.permissions.request({ origins: ["http://*/*", "https://*/*"] });
     if (!granted) {
-      $("#saved").textContent = "未授予网页保护权限，未启用智能保护模式";
+      saveError("未授予网页保护权限，未启用智能保护模式");
       return;
     }
   }
   const modeResult = await chrome.runtime.sendMessage({ type: "setSuspensionMode", mode });
   if (!modeResult.ok) {
-    $("#saved").textContent = modeResult.reason;
+    saveError(modeResult.reason);
     return;
   }
   if (aiProvider === "compatible") {
     try { await saveCompatible(); }
-    catch (error) { $("#saved").textContent = error.message; return; }
+    catch (error) { saveError(error.message, $("#compatible-endpoint")); return; }
   }
   const savedResult = await chrome.runtime.sendMessage({
     type: "updateSettings",
@@ -131,9 +177,12 @@ $("#settings-form").addEventListener("submit", async (event) => {
       nativeDiscardDomains: lines($("#native-discard-domains").value)
     }
   });
-  if (savedResult.ok === false) { $("#saved").textContent = savedResult.reason; return; }
+  if (savedResult.ok === false) { saveError(savedResult.reason); return; }
+  captureSettings();
+  $("#saved").classList.remove("is-error");
   $("#saved").textContent = "已保存";
-  setTimeout(() => { $("#saved").textContent = ""; }, 1600);
+  } catch (error) { saveError(error.message || "设置未保存，请重试。"); }
+  finally { saving = false; $("#settings-form").inert = false; saveButton.disabled = false; saveButton.textContent = "保存设置"; }
 });
 
 $("#sync-metadata").addEventListener("click", async () => {
@@ -209,6 +258,7 @@ $("#apply-site-template").addEventListener("click", () => {
   $("#manual-domains").value = next.manualDomains.join("\n");
   $("#native-discard-domains").value = next.nativeDiscardDomains.join("\n");
   $("#template-feedback").textContent = `已填入${template.label}模板；请保存设置后生效。`;
+  showDirty();
 });
 
 function syncOllamaConfig() {
@@ -239,10 +289,13 @@ async function saveCompatible() {
   });
   $("#compatible-key").value = "";
   await credentialStatus();
+  for (const input of trackedControls().filter((item) => item.closest("#compatible-config") || item.name === "ai-provider")) baseline.set(input.id, controlValue(input));
+  showDirty();
 }
 $("#compatible-model-choice").addEventListener("change", () => {
   if ($("#compatible-model-choice").value) $("#compatible-model").value = $("#compatible-model-choice").value;
   $("#compatible-feedback").textContent = "模型已选择，请保存配置。";
+  showDirty();
 });
 for (const [id, action] of [["save-compatible", "save"], ["list-compatible", "listCompatibleModels"], ["test-compatible", "testCompatibleConnection"], ["clear-model-key", "clearModelCredential"]]) {
   $(`#${id}`).addEventListener("click", async () => {
@@ -288,6 +341,7 @@ $("#test-ollama").addEventListener("click", async () => {
 $("#ollama-model-choice").addEventListener("change", () => {
   if ($("#ollama-model-choice").value) $("#ollama-model").value = $("#ollama-model-choice").value;
   $("#ollama-feedback").textContent = "模型已选择，请重新自检并保存设置。";
+  showDirty();
 });
 $("#test-browser-model").addEventListener("click", async () => {
   const button = $("#test-browser-model");

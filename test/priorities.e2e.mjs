@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { show } from "./ui-navigation.mjs";
 import { sourceState } from "../src/shared/restoration.js";
 
 export async function verifyPriorities({ context, control, fixture, extensionUrl, message, waitForBrowserState }) {
   let workspace = (await message(control, "getWorkspaces"))[0];
   await control.reload();
+  await show(control, "#workspace-manager");
   await control.locator(`[data-key="${workspace.id}"]`).getByRole("button", { name: "编辑", exact: true }).click();
   const editor = control.locator(".workspace-editor");
   await editor.locator('[name="workspace-tags"]').fill("AI, 性能");
@@ -11,14 +13,14 @@ export async function verifyPriorities({ context, control, fixture, extensionUrl
   await editor.locator('[name="workspace-favorite"]').check();
   await editor.getByRole("button", { name: "保存修改" }).click();
   await editor.waitFor({ state: "hidden" });
-  await control.locator(".ws-favorite").check();
+  await (await show(control, ".ws-favorite")).check();
   await control.locator(".ws-tag").selectOption("AI");
   await control.locator(".ws-filter-name").fill("常用 AI");
   await control.getByRole("button", { name: "保存筛选", exact: true }).click();
   await waitForBrowserState(control, async () => (await chrome.runtime.sendMessage({ type: "getWorkspaceFilters" })).some((item) => item.name === "常用 AI"));
   await control.reload();
   await control.locator(".ws-saved-filter option").filter({ hasText: "常用 AI" }).waitFor({ state: "attached" });
-  await control.locator(".ws-saved-filter").selectOption({ label: "常用 AI" });
+  await (await show(control, ".ws-saved-filter")).selectOption({ label: "常用 AI" });
   await waitForBrowserState(control, () => document.querySelector(".ws-tag").value === "AI");
   assert.equal(await control.locator(".ws-favorite").isChecked(), true);
   assert.equal(await control.locator(".ws-tag").inputValue(), "AI");
@@ -28,6 +30,7 @@ export async function verifyPriorities({ context, control, fixture, extensionUrl
 
   const options = await context.newPage();
   await options.goto(`${extensionUrl}/src/options/options.html`);
+  await show(options, "#backup-reminder-days");
   await options.locator("#backup-reminder-days").selectOption("7");
   await waitForBrowserState(options, async () => (await chrome.runtime.sendMessage({ type: "getBackupStatus" })).due);
   const before = await message(options, "getWorkspaces");

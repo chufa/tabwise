@@ -9,7 +9,7 @@ export function createTaskUI(host, feedback, refresh) {
   let selected;
   let offset = 0;
   let revision = 0;
-  host.innerHTML = `<details open><summary>统一任务中心</summary><p class="saved-hint">恢复与批量任务各保留本地最近 10 项，浏览器重启仍可查看。旧会话批量任务只保留摘要，需重新预览当前页面。停止后当前批次会完成，不确定项需检查。处理完可归档。</p><label><input type="checkbox" class="show-archived-tasks">显示已归档任务</label><div class="task-list"></div><div class="task-detail" hidden></div></details>`;
+  host.innerHTML = `<details open><summary>统一任务中心</summary><p class="saved-hint">查看恢复与批量操作的进度，处理完可归档。</p><details class="task-guide"><summary>记录保留与续跑说明</summary><p class="saved-hint">恢复与批量任务各保留本地最近 10 项，浏览器重启仍可查看。旧会话批量任务只保留摘要，需重新预览当前页面。停止后当前批次会完成，不确定项需检查。</p></details><label><input type="checkbox" class="show-archived-tasks">显示已归档任务</label><div class="task-list"></div><div class="task-detail" hidden></div></details>`;
   host.querySelector(".show-archived-tasks").addEventListener("change", () => update().catch((error) => feedback(error.message, true)));
   async function update() {
     const version = ++revision;

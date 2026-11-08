@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
+import { show } from "./ui-navigation.mjs";
 
 export async function verifyEnhancements({ context, control, fixture, extensionUrl, message, waitForBrowserState, waitForWorker }) {
   const options = await context.newPage();
@@ -7,7 +8,8 @@ export async function verifyEnhancements({ context, control, fixture, extensionU
   control.on("pageerror", (error) => errors.push(error.message));
   options.on("pageerror", (error) => errors.push(error.message));
   await options.goto(`${extensionUrl}/src/options/options.html`);
-  await options.locator("#idle-minutes").waitFor();
+  await options.locator('#settings-form[aria-busy="false"]').waitFor();
+  await show(options, "#import-backup");
   const initial = await control.evaluate(() => chrome.storage.local.get(["settings", "workspaces"]));
   const backup = await message(control, "exportBackup");
   assert.equal(backup.schemaVersion, 2);
@@ -35,8 +37,9 @@ export async function verifyEnhancements({ context, control, fixture, extensionU
   assert.equal(imported.tabs[999].status, "suspended");
   await control.reload();
   await control.bringToFront();
-  await control.locator("#ai-scope").selectOption("current");
+  await (await show(control, "#ai-scope")).selectOption("current");
   assert.equal(await control.locator('#ai-tab-options input[type="checkbox"]').count(), 0, "AI scope must mount lazily");
+  await show(control, "#workspace-manager");
   await control.locator("#workspace-manager .saved-workspace").filter({ hasText: saved.name }).getByRole("button", { name: "编辑", exact: true }).click();
   const editor = control.locator(".workspace-editor");
   assert.equal(await editor.locator('.paged-rows input[type="checkbox"]').count(), 50);
@@ -98,6 +101,7 @@ export async function verifyEnhancements({ context, control, fixture, extensionU
     await chrome.storage.local.set({ recoveryCheckpoints: [{ ...workspace, id: "large-diff", createdAt: Date.now() }, ...recoveryCheckpoints].slice(0, 10) });
   }, imported);
   await waitForBrowserState(control, () => [...document.querySelector(".compare-before").options].some((option) => option.value === "large-diff"));
+  await show(control, "#session-tools");
   if (!await control.locator(".session-compare").evaluate((element) => element.open)) await control.locator(".session-compare > summary").click();
   await control.locator(".compare-before").selectOption("large-diff");
   await control.locator(".compare-after").selectOption("current");
@@ -207,7 +211,7 @@ export async function verifyEnhancements({ context, control, fixture, extensionU
     chrome.scripting.executeScript = async () => [{ result: { usedJSHeapSize: 1048576, totalJSHeapSize: 2097152 } }];
   });
   try {
-    await control.locator("#ai-scope").selectOption("selected");
+    await (await show(control, "#ai-scope")).selectOption("selected");
     await control.locator("#refresh-ai-sources").click();
     await control.locator("#ai-tab-options").getByText("增强规模 0", { exact: true }).waitFor();
     assert.equal(await control.locator('#ai-tab-options .paged-rows input[type="checkbox"]').count(), 50);
@@ -216,7 +220,7 @@ export async function verifyEnhancements({ context, control, fixture, extensionU
     await control.locator('#ai-tab-options input[value="200050"]').check();
     await control.locator("#preview-ai-input").click();
     await control.locator("#ai-input-summary").getByText(/^2 页/).waitFor();
-    await control.locator("#measure-resources").click();
+    await (await show(control, "#measure-resources")).click();
     await control.locator("#renderer-diagnostics .list-pagination").getByText("第 1 / 20 页 · 匹配 1000 项").waitFor();
     assert.equal(await control.locator("#renderer-diagnostics .paged-rows > .saved-member").count(), 50);
     await control.locator("#renderer-diagnostics .list-search").fill("增强规模 999");
@@ -228,7 +232,7 @@ export async function verifyEnhancements({ context, control, fixture, extensionU
       delete globalThis.enhancementQuery; delete globalThis.enhancementScript;
     });
   }
-  await control.locator("#ai-scope").selectOption("current");
+  await (await show(control, "#ai-scope")).selectOption("current");
   await control.evaluate(() => {
     globalThis.paletteSend = chrome.runtime.sendMessage.bind(chrome.runtime);
     chrome.runtime.sendMessage = (message) => {
