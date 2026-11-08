@@ -117,3 +117,14 @@ test("untitled pages retain their browser identity when the preview supplies a l
   assert.equal(untitledSnapshot.pages[0].title, "未命名页面");
   assert.equal(validateAiMembers(untitledSnapshot, [1], untitledTabs, [], "save", 2_000).length, 1);
 });
+test("theme titles and goals redact embedded URLs and credentials while retaining local browser identity", () => {
+  const sensitiveTabs = [{ ...tabs[0], title: "Research https://private.test/path?token=secret user@private.test api_key=sk-private" }];
+  const input = { ...snapshot, request: "整理 https://private.test/path?token=secret", pages: selectAiPages({ tabs: sensitiveTabs, scope: "current", windowId: 1 }) };
+  const preview = publicAiSnapshot(input), prompt = buildAiThemePrompt(input, input.request);
+  for (const secret of ["private.test", "sk-private", "https://"]) {
+    assert.ok(!JSON.stringify(preview).includes(secret), secret);
+    assert.ok(!prompt.includes(secret), secret);
+  }
+  assert.equal(input.pages[0].sourceTitle, sensitiveTabs[0].title);
+  assert.equal(validateAiMembers(input, [1], sensitiveTabs, [], "save", 2000).length, 1);
+});

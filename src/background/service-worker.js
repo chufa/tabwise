@@ -31,9 +31,22 @@ import { getEffects, recordEffect } from "../shared/storage.js";
 import { createResources } from "./resources.js";
 import { suspensionTransaction } from "../shared/suspension-transaction.js";
 import { createOrganization } from "./organization.js";
+import { createContextManager, CONTEXT_COMMANDS } from "./context-manager.js";
+import { protectContextStorage } from "../shared/context-storage.js";
+import { createModelAccess, MODEL_COMMANDS } from "./model-access.js";
+import { sameModel, modelLabel, normalizeCompatibleEndpoint, fetchModelJson } from "../shared/ai-provider.js";
+import { sanitizeAiText } from "../shared/ai-input.js";
+
+const modelAccess = createModelAccess({ getSettings, changeSettings });
+const contextManager = createContextManager({
+  getTabs: logicalTabs, getWorkspaces, getSettings, fetchOllama,
+  getModelConfig: modelAccess.config, generateModel: modelAccess.generate,
+  getWindowId: async () => (await chrome.windows.getLastFocused()).id
+});
 
 const extensionOrigin = chrome.runtime.getURL("").replace(/\/$/, "");
 const reportWorkerError = (error) => reportDiagnostic({ source: "service-worker", message: error?.message || String(error) }).catch(() => {});
+protectContextStorage().catch(reportWorkerError);
 globalThis.addEventListener?.("error", (event) => reportWorkerError(event.error || event.message));
 globalThis.addEventListener?.("unhandledrejection", (event) => reportWorkerError(event.reason));
 const pageTracker = createPageTracker(extensionOrigin);
@@ -56,7 +69,7 @@ function stateChanged(indexChanged = true) {
 }
 chrome.storage.onChanged?.addListener((changes) => {
   const indexKeys = ["workspaces", "recoveryCheckpoints", "recentSuspensions", "closedPages", "suspensionRecords", "suspensionRestoreRecords", "lastActivity", "settings"];
-const displayKeys = [...indexKeys, "resourceSnapshots", "resourceReviews", "operationJournal", "restoreTasks", "batchTasks", "workspaceBindings", "temporaryTabProtection", "effectHistory", "backupManagement"];
+const displayKeys = [...indexKeys, "resourceSnapshots", "resourceReviews", "operationJournal", "restoreTasks", "batchTasks", "workspaceBindings", "temporaryTabProtection", "effectHistory", "backupManagement", "contextTasks"];
   if (Object.keys(changes).some((key) => displayKeys.includes(key))) stateChanged(Object.keys(changes).some((key) => indexKeys.includes(key)));
 });
 const tabQueues = new Map();
@@ -257,12 +270,12 @@ async function prepareAiAnalysis(message, sender) {
       })
     });
     const now = Date.now();
+    const modelConfig = await modelAccess.config();
     const snapshot = {
       id: crypto.randomUUID(), owner: sender.documentId, scope: message.scope,
       createdAt: now, expiresAt: now + 10 * 60_000, pages,
-      request: String(message.request || "").slice(0, 240), provider: settings.aiProvider,
-      endpoint: normalizeOllamaEndpoint(settings.ollamaEndpoint), model: settings.ollamaModel,
-      recipient: settings.aiProvider === "ollama" ? `Ollama · ${settings.ollamaEndpoint} · ${settings.ollamaModel}` : "浏览器内置模型",
+      request: sanitizeAiText(message.request).slice(0, 240), ...modelConfig,
+      recipient: modelLabel(modelConfig),
       applied: []
     };
     const snapshots = (await readAiSnapshots()).filter((item) => item.owner !== sender.documentId).slice(-4);
@@ -276,6 +289,7 @@ async function acceptAiPlan(id, answer, sender) {
   return runAi(async () => {
     const { snapshots, snapshot } = await aiSnapshotForSender(id, sender);
     if (snapshot.generation === "cancelled") throw new Error("生成已取消，请重新预览。");
+    if (!sameModel(await modelAccess.config(), snapshot)) throw new Error("模型设置已变化，请重新预览。");
     if (snapshot.plan) throw new Error("此输入已经生成建议，请重新预览后重试。");
     const plan = validateAiPlan(answer, snapshot);
     validateAiMembers(snapshot, snapshot.pages.map((page) => page.pageId), await chrome.tabs.query({}), await getWorkspaces(), "save");
@@ -360,13 +374,16 @@ function sanitizeSettings(current, update) {
     manualDomains: Array.isArray(update.manualDomains) ? normalizeList(update.manualDomains) : current.manualDomains,
     nativeDiscardDomains: Array.isArray(update.nativeDiscardDomains) ? normalizeList(update.nativeDiscardDomains) : current.nativeDiscardDomains,
     semanticSearch: typeof update.semanticSearch === "boolean" ? update.semanticSearch : current.semanticSearch,
-    aiProvider: update.aiProvider === "ollama" || update.aiProvider === "browser" ? update.aiProvider : current.aiProvider,
+    aiProvider: ["ollama", "browser", "compatible"].includes(update.aiProvider) ? update.aiProvider : current.aiProvider,
     ollamaEndpoint: typeof update.ollamaEndpoint === "string"
       ? normalizeOllamaEndpoint(update.ollamaEndpoint, current.ollamaEndpoint)
       : current.ollamaEndpoint,
     ollamaModel: typeof update.ollamaModel === "string"
       ? normalizeOllamaModel(update.ollamaModel, current.ollamaModel)
       : current.ollamaModel,
+    compatibleEndpoint: typeof update.compatibleEndpoint === "string" ? normalizeCompatibleEndpoint(update.compatibleEndpoint, current.compatibleEndpoint) : current.compatibleEndpoint,
+    compatibleModel: typeof update.compatibleModel === "string" ? normalizeOllamaModel(update.compatibleModel, current.compatibleModel) : current.compatibleModel,
+    compatibleJson: typeof update.compatibleJson === "boolean" ? update.compatibleJson : current.compatibleJson,
     scheduledReviewEnabled: typeof update.scheduledReviewEnabled === "boolean" ? update.scheduledReviewEnabled : current.scheduledReviewEnabled,
     scheduledReviewHour: Number.isFinite(Number(update.scheduledReviewHour))
       ? Math.min(23, Math.max(0, Math.round(Number(update.scheduledReviewHour))))
@@ -959,23 +976,11 @@ async function openSavedPage(page) {
 }
 
 async function fetchOllama(endpoint, path, init = {}, timeoutMs = 30_000, signal) {
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  signal?.addEventListener("abort", abort, { once: true });
-  if (signal?.aborted) controller.abort();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`${endpoint}${path}`, { ...init, signal: controller.signal, cache: "no-store", redirect: "error" });
-    const body = await response.json().catch((error) => {
-      if (controller.signal.aborted) throw error;
-      return null;
-    });
-    if (response.status === 403) throw new Error(`Ollama 拒绝扩展来源（403）。请将 OLLAMA_ORIGINS 设为 ${extensionOrigin} 并重启本地服务。`);
-    if (!response.ok) throw new Error(body?.error || `Ollama 返回 HTTP ${response.status}`);
-    return body;
-  } finally {
-    clearTimeout(timeout);
-    signal?.removeEventListener("abort", abort);
+    return await fetchModelJson(`${endpoint}${path}`, init, { signal, timeoutMs });
+  } catch (error) {
+    if (error.message.includes("HTTP 403")) throw new Error(`Ollama 拒绝扩展来源（403）。请将 OLLAMA_ORIGINS 设为 ${extensionOrigin} 并重启本地服务。`);
+    throw error;
   }
 }
 
@@ -1021,6 +1026,7 @@ async function beginAiGeneration(id, sender) {
   return runAi(async () => {
     const { snapshot, snapshots } = await aiSnapshotForSender(id, sender);
     if (snapshot.plan || snapshot.generation) throw new Error("此输入已生成、取消或正在处理，请重新预览。");
+    if (!sameModel(await modelAccess.config(), snapshot)) throw new Error("模型设置已变化，请重新预览接收方。");
     validateAiMembers(snapshot, snapshot.pages.map((page) => page.pageId), await chrome.tabs.query({}), await getWorkspaces(), "save");
     const data = await chrome.storage.session.get(AI_CACHE_KEY);
     const plan = await cachedAiPlan(data[AI_CACHE_KEY] || [], snapshot);
@@ -1052,16 +1058,12 @@ async function generateAiThemes(id, sender) {
   aiControllers.set(id, { controller, owner: sender.documentId });
   try {
     const { snapshot } = await runAi(() => aiSnapshotForSender(id, sender));
-    if (snapshot.provider !== "ollama") throw new Error("本次预览选择的是浏览器内置模型。");
-    if (!snapshot.endpoint || !snapshot.model) throw new Error("请在设置中填写本地 Ollama 地址和模型名。");
+    if (snapshot.provider === "browser") throw new Error("本次预览选择的是浏览器内置模型。");
     if (snapshot.generation === "cancelled") controller.abort();
-    const body = await fetchOllama(snapshot.endpoint, "/api/generate", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(buildOllamaRequest(buildAiThemePrompt(snapshot, snapshot.request), snapshot.model, AI_PLAN_SCHEMA))
-    }, 90_000, controller.signal);
+    const result = await modelAccess.generate(snapshot, buildAiThemePrompt(snapshot, snapshot.request), AI_PLAN_SCHEMA,
+      { signal: controller.signal, maxTokens: 1600 });
     if (controller.signal.aborted) throw new Error("生成已取消，请重新预览。");
-    return await acceptAiPlan(id, String(body?.response || ""), sender);
+    return { ...await acceptAiPlan(id, result.answer, sender), latencyMs: result.latencyMs, usage: result.usage };
   } catch (error) {
     return { ok: false, reason: controller.signal.aborted ? "生成已取消，请重新预览。" : error.name === "AbortError" ? "Ollama 生成超时，请重新预览后重试。" : error.message };
   } finally {
@@ -1247,16 +1249,29 @@ chrome.runtime.onConnect.addListener((port) => {
     pageTracker.initialize().catch(console.error);
     return;
   }
-  if (port.name !== "tabwise-ai" || sender?.id !== chrome.runtime.id
+  if (!["tabwise-ai", "tabwise-context-ai"].includes(port.name) || sender?.id !== chrome.runtime.id
     || sender.url !== chrome.runtime.getURL("src/sidepanel/sidepanel.html") || !sender.documentId) return;
   let snapshotId;
   port.onMessage.addListener((message) => { if (typeof message.snapshotId === "string") snapshotId = message.snapshotId; });
   port.onDisconnect.addListener(() => {
+    if (port.name === "tabwise-context-ai") { if (snapshotId) contextManager.disconnect(snapshotId, sender); return; }
     if (snapshotId) cancelAiGeneration(snapshotId, sender, true).catch(() => {});
   });
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (MODEL_COMMANDS.has(message.type)) {
+    modelAccess.handle(message, sender).then(sendResponse).catch((error) => sendResponse({ ok: false, reason: error.message }));
+    return true;
+  }
+  if (message.type === "prepareRestore" && message.kind === "context"
+    && (sender?.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL("src/sidepanel/sidepanel.html") || !sender.documentId)) {
+    sendResponse({ ok: false, reason: "任务资料恢复仅可从 TabWise 侧栏操作。" }); return false;
+  }
+  if (CONTEXT_COMMANDS.has(message.type)) {
+    contextManager.handle(message, sender).then(sendResponse).catch((error) => sendResponse({ ok: false, reason: error.message }));
+    return true;
+  }
   const aiTasks = {
     prepareAiAnalysis: () => prepareAiAnalysis(message, sender),
     beginAiGeneration: () => beginAiGeneration(message.snapshotId, sender),

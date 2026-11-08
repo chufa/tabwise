@@ -24,7 +24,7 @@ test("cache rebinds membership and snapshot rather than reusing browser ids", as
 
 test("cache separates providers, models, goals, metadata and duplicate pages", async () => {
   const key = await aiCacheKey(snapshot);
-  for (const patch of [{ provider: "browser" }, { model: "other" }, { request: "别的目标" }, { endpoint: "http://localhost:9999" }, { pages: [snapshot.pages[0]] }]) {
+  for (const patch of [{ provider: "browser" }, { model: "other" }, { credentialRevision: "new-key" }, { jsonMode: false }, { request: "别的目标" }, { endpoint: "http://localhost:9999" }, { pages: [snapshot.pages[0]] }]) {
     assert.notEqual(await aiCacheKey({ ...snapshot, ...patch }), key);
   }
   const duplicate = { ...snapshot, pages: [{ ...snapshot.pages[0] }, { ...snapshot.pages[0], pageId: 2 }] };

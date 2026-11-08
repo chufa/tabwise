@@ -44,6 +44,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
 .backup-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
 .connection-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
 .connection-row span { min-width: 0; overflow-wrap: anywhere; color: #087268; font-size: 13px; line-height: 1.55; }
+#compatible-config .switch-row { margin-top: 18px; }
+#credential-status, #compatible-feedback { overflow-wrap: anywhere; }
+input::placeholder, textarea::placeholder { color: #5c727d; opacity: 1; }
 .import-button { display: inline-flex; align-items: center; border: 1px solid #b9ccd2; border-radius: 7px; padding: 10px 15px; background: #fff; color: #12655f; font-size: 13px; font-weight: 760; cursor: pointer; }
 .import-button:hover { border-color: #63a99f; background: #effaf7; }
 .import-button input { position: absolute; width: 1px; height: 1px; opacity: 0; }
@@ -83,6 +86,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px
   .mode-option:hover { background: #193540; }
   input[type="number"], input[type="text"], input[type="url"], input[type="password"], input[type="time"], textarea, .import-button { border-color: #3d5661; background: #172b37; color: #e8f1f4; }
   .connection-row span { color: #8edfd1; }
+  input::placeholder, textarea::placeholder { color: #a8bdc7; }
   #backup-preview fieldset, #backup-preview fieldset .check + .check, #sync-preview, .sync-conflict, .sync-history, .sync-history-item { border-color: #3d5661; }
   select { border-color: #3d5661; background: #172b37; color: #e8f1f4; }
   .import-button { color: #8edfd1; }

@@ -6,6 +6,8 @@ import { appendRestoreAudit, resumeRestoreIndices } from "../shared/restore-audi
 import { isTaskActive } from "../shared/task-state.js";
 import { archiveTaskRecord, retainTasks } from "../shared/task-ledger.js";
 import { createTaskLedger } from "./task-ledger.js";
+import { getContextTasks } from "../shared/context-storage.js";
+import { contextRestoreSource } from "../shared/task-context.js";
 
 const KEY = "restorePreviews";
 
@@ -20,11 +22,11 @@ export async function logicalTabs() {
 }
 
 async function savedSource(kind, id) {
-  if (!["workspace", "checkpoint"].includes(kind)) throw new Error("恢复来源无效。");
-  const sources = await (kind === "workspace" ? getWorkspaces() : getRecoveryCheckpoints());
+  if (!["workspace", "checkpoint", "context"].includes(kind)) throw new Error("恢复来源无效。");
+  const sources = await (kind === "context" ? getContextTasks() : kind === "workspace" ? getWorkspaces() : getRecoveryCheckpoints());
   const source = sources.find((item) => item.id === id);
   if (!source) throw new Error("保存的内容不存在，请刷新列表。");
-  return source;
+  return kind === "context" ? contextRestoreSource(source) : source;
 }
 
 async function waitForLoad(tabId) {

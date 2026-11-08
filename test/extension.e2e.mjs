@@ -10,6 +10,7 @@ import { verifyExpansion } from "./expansion.e2e.mjs";
 import { verifyEnhancements } from "./enhancements.e2e.mjs";
 import { verifyPriorities, prepareRestart, verifyRestart } from "./priorities.e2e.mjs";
 import { verifyReliability } from "./reliability.e2e.mjs";
+import { verifyContextMemory, verifyContextRestart } from "./context-memory.e2e.mjs";
 
 const extensionPath = path.resolve(".");
 const failureDirectory = await mkdtemp(path.join(os.tmpdir(), "tabwise-failure-"));
@@ -38,7 +39,7 @@ function startTestServer() {
     this.enabled = false;
     this.responses.splice(0).forEach((send) => send());
   } };
-  const ai = { requests: [], probes: [], invalid: false, forbidden: false, hold: false, release: null, aborted: 0, badProbe: false };
+  const ai = { requests: [], contextRequests: [], probes: [], invalid: false, forbidden: false, hold: false, release: null, aborted: 0, badProbe: false };
   const server = createServer((request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");
     if (url.pathname === "/api/tags") {
@@ -65,6 +66,14 @@ function startTestServer() {
           return;
         }
         const payload = JSON.parse(body);
+        if (payload.prompt.includes("任务上下文：")) {
+          const input = JSON.parse(payload.prompt.split("任务上下文：")[1]);
+          ai.contextRequests.push(payload);
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify({ response: JSON.stringify({ schemaVersion: 1, snapshotId: input.snapshotId,
+            summary: "Ollama 续接建议", hypotheses: [], questions: [], nextSteps: [{ text: "继续核对资料", sourceIds: input.sources.map((s) => s.sourceId) }] }) }));
+          return;
+        }
         if (!payload.prompt.includes("输入快照：")) {
           ai.probes.push(payload);
           response.writeHead(200, { "content-type": "application/json" });
@@ -223,7 +232,7 @@ try {
   assert.equal(nativeAiGroup.length, 1);
   await control.waitForFunction(() => !document.querySelector(".ai-theme-name").disabled);
   if (process.env.TABWISE_E2E_ARTIFACT_DIR) {
-    const aiSection = control.locator("section").filter({ has: control.getByRole("heading", { name: "本地 AI 整理" }) });
+    const aiSection = control.locator("section").filter({ has: control.getByRole("heading", { name: "AI 主题整理" }) });
     for (const colorScheme of ["light", "dark"]) {
       await control.emulateMedia({ colorScheme });
       await control.setViewportSize({ width: 320, height: 900 });
@@ -736,6 +745,7 @@ try {
   await verifyEnhancements({ context, control, fixture, extensionUrl, message, waitForBrowserState, waitForWorker });
   await verifyPriorities({ context, control, fixture, extensionUrl, message, waitForBrowserState });
   await verifyReliability({ context, control, fixture, extensionUrl, message, waitForBrowserState, waitForWorker });
+  const contextMemory = await verifyContextMemory({ context, control, fixture, extensionUrl });
   if (process.env.TABWISE_E2E_ARTIFACT_DIR) {
     await control.reload();
     await control.locator(".operation-item").first().waitFor();
@@ -776,6 +786,7 @@ try {
   const resumed = await context.newPage();
   await resumed.goto(`${extensionUrl}/src/sidepanel/sidepanel.html`);
   await verifyRestart({ control: resumed, fixture, message, waitForBrowserState, restart });
+  await verifyContextRestart(resumed, contextMemory);
   console.log("E2E PASS: existing workflows; workspace metadata/filters, backup drill/reminder, on-demand no-request restore, protection, effects, browser restart with durable tasks");
 } catch (error) {
   const page = context?.pages().find((item) => item.url().includes("/src/sidepanel/"));

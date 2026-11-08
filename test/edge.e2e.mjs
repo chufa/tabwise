@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { chromium } from "playwright";
+import { verifyContextMemory } from "./context-memory.e2e.mjs";
 
 const profile = await mkdtemp(path.join(os.tmpdir(), "tabwise-edge-"));
 const hits = new Map();
@@ -54,6 +55,7 @@ try {
   await options.locator("#sync-metadata").click();
   await options.waitForFunction(() => !document.querySelector("#sync-metadata").disabled);
   assert.equal(await options.locator("#sync-preview").isVisible(), true, await options.locator("#sync-feedback").textContent());
+  await verifyContextMemory({ context, control, extensionUrl, fixture: { baseUrl: `http://127.0.0.1:${server.address().port}`, hits } });
   console.log(`Edge PASS: ${await context.browser().version()}, MV3 worker, popup/options/sidepanel, suspension restore, tagged on-demand preview with no origin request`);
 } finally {
   await context?.close();

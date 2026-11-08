@@ -1,9 +1,15 @@
 # Changelog
 
-## Unreleased - 2026-11-07
+## Unreleased - 2026-11-08
 
 ### Features
 
+- Add a shared real-model adapter for task continuation and theme organization, supporting loopback Ollama and HTTPS OpenAI-compatible Chat Completions.
+- Allow user-supplied service/model configuration, model listing, synthetic JSON self-checks and optional JSON mode; ship no endpoint/model presets.
+- Store endpoint-bound BYOK credentials separately in trusted session storage by default, with explicit unencrypted local persistence and clearing.
+- Add local task memory with goals, progress, confirmed notes, questions, selected sources and manually supplied excerpts.
+- Generate editable, cited continuation drafts using browser models or loopback Ollama with full sanitized input previews and explicit adoption.
+- Export task context as cited Markdown or JSON and resume selected sources through the durable on-demand restore ledger.
 - Persist restore and batch task ledgers across browser restarts, clear stale browser bindings, and allow completed task archival.
 - Add on-demand workspace restoration and configurable concurrency from one to five pages.
 - Support domain idle thresholds, one-hour protection, and session protection.
@@ -16,6 +22,11 @@
 
 ### Reliability
 
+- Invalidate model previews and theme cache on provider, endpoint, model, JSON mode or credential revision changes.
+- Bound model response sizes and output budgets, abort cancelled/time-limited requests, reject truncation, and never echo provider error bodies or retry paid requests automatically.
+- Redact embedded URLs, email addresses and common credentials in theme titles/goals while retaining original local browser identities; prevent settings edits until initial state is loaded.
+- Separate task memory from browser job ledgers and sync; enforce optimistic revisions, bounded local capacity, trusted storage access and sidepanel document ownership.
+- Invalidate pending continuation snapshots on cancellation, input edits or worker restart; preserve confirmed user notes and mark adopted drafts stale after changes.
 - Extract resource collection, scheduling and navigation revision tracking into a background module.
 - Prefer durable reservations after incomplete session mirror writes; compare state independently of storage key order.
 - Restore the recorded tab when requests originate from an extension dashboard.
@@ -27,6 +38,9 @@
 
 ### Tests
 
+- Add compatible API browser coverage for task/theme generation, HTTP errors, cancellation, credential access, backup exclusion and session/local restart behavior.
+- Extend isolated Ollama validation from a JSON probe to a cited continuation task with edited adoption and Markdown export.
+- Cover task persistence, scoped source revalidation, provider/schema checks, late result rejection, storage failure, dirty edits, local exports and selected task restoration in Chromium and Edge.
 - Cover feature controls, on-demand restoration without original-site requests, and full browser restart without task replay.
 - Capture screenshots and worker diagnostics with bounded timeouts on E2E failures.
 - Add matched real Chromium baseline/extension measurements using isolated synthetic pages.

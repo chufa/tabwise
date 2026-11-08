@@ -11,6 +11,8 @@ function lines(value) {
 }
 
 async function load() {
+  $("#settings-form").inert = true;
+  $("#settings-form").setAttribute("aria-busy", "true");
   const settings = await chrome.runtime.sendMessage({ type: "getDashboard" }).then((data) => data.settings);
   $("#idle-minutes").value = settings.idleMinutes;
   $("#auto-suspend").checked = settings.autoSuspend;
@@ -28,8 +30,12 @@ async function load() {
   $("#closed-history-enabled").checked = settings.closedHistoryEnabled;
   $("#closed-history-days").value = settings.closedHistoryDays;
   $(`input[name="ai-provider"][value="${settings.aiProvider || "browser"}"]`).checked = true;
-  $("#ollama-endpoint").value = settings.ollamaEndpoint || "http://127.0.0.1:11434";
+  $("#ollama-endpoint").value = settings.ollamaEndpoint || "";
   $("#ollama-model").value = settings.ollamaModel || "";
+  $("#compatible-endpoint").value = settings.compatibleEndpoint || "";
+  $("#compatible-model").value = settings.compatibleModel || "";
+  $("#compatible-json").checked = settings.compatibleJson !== false;
+  await credentialStatus();
   syncOllamaConfig();
   $("#trusted-domains").value = settings.trustedDomains.join("\n");
   $("#blocked-domains").value = settings.blockedDomains.join("\n");
@@ -38,6 +44,8 @@ async function load() {
   $("#site-idle-rules").value = (settings.siteIdleRules || []).map((rule) => `${rule.domain} ${rule.minutes}`).join("\n");
   await renderSyncHistory();
   await renderBackupStatus();
+  $("#settings-form").inert = false;
+  $("#settings-form").setAttribute("aria-busy", "false");
 }
 
 async function renderBackupStatus() {
@@ -89,6 +97,10 @@ $("#settings-form").addEventListener("submit", async (event) => {
   if (!modeResult.ok) {
     $("#saved").textContent = modeResult.reason;
     return;
+  }
+  if (aiProvider === "compatible") {
+    try { await saveCompatible(); }
+    catch (error) { $("#saved").textContent = error.message; return; }
   }
   const savedResult = await chrome.runtime.sendMessage({
     type: "updateSettings",
@@ -200,11 +212,62 @@ $("#apply-site-template").addEventListener("click", () => {
 });
 
 function syncOllamaConfig() {
-  $("#ollama-config").hidden = document.querySelector('input[name="ai-provider"]:checked').value !== "ollama";
-  $("#browser-model-check").hidden = !$("#ollama-config").hidden;
+  const provider = document.querySelector('input[name="ai-provider"]:checked').value;
+  $("#ollama-config").hidden = provider !== "ollama";
+  $("#compatible-config").hidden = provider !== "compatible";
+  $("#browser-model-check").hidden = provider !== "browser";
 }
 
 document.querySelectorAll('input[name="ai-provider"]').forEach((input) => input.addEventListener("change", syncOllamaConfig));
+
+async function modelMessage(type, fields = {}) {
+  const result = await chrome.runtime.sendMessage({ type, ...fields });
+  if (!result?.ok) throw new Error(result?.reason || "模型配置失败，请重试。");
+  return result;
+}
+async function credentialStatus() {
+  const status = await modelMessage("getModelCredentialStatus");
+  $("#persist-model-key").checked = status.persistence === "local";
+  $("#credential-status").textContent = status.hasKey
+    ? `密钥已保存 · ${status.persistence === "local" ? "本机记住（未加密）" : "当前浏览器会话"} · 仅用于 ${status.endpoint}`
+    : "尚未保存密钥；本机无认证服务可直接使用。";
+}
+async function saveCompatible() {
+  await modelMessage("saveCompatibleConfig", {
+    endpoint: $("#compatible-endpoint").value, model: $("#compatible-model").value,
+    key: $("#compatible-key").value, persist: $("#persist-model-key").checked, jsonMode: $("#compatible-json").checked
+  });
+  $("#compatible-key").value = "";
+  await credentialStatus();
+}
+$("#compatible-model-choice").addEventListener("change", () => {
+  if ($("#compatible-model-choice").value) $("#compatible-model").value = $("#compatible-model-choice").value;
+  $("#compatible-feedback").textContent = "模型已选择，请保存配置。";
+});
+for (const [id, action] of [["save-compatible", "save"], ["list-compatible", "listCompatibleModels"], ["test-compatible", "testCompatibleConnection"], ["clear-model-key", "clearModelCredential"]]) {
+  $(`#${id}`).addEventListener("click", async () => {
+    const buttons = [...$("#compatible-config").querySelectorAll("button")];
+    buttons.forEach((button) => { button.disabled = true; });
+    $("#compatible-feedback").textContent = action === "testCompatibleConnection" ? "正在检查 JSON 推理，最多等待 90 秒…" : "正在处理…";
+    try {
+      if (action === "clearModelCredential") {
+        await modelMessage(action); $("#compatible-key").value = ""; await credentialStatus();
+        $("#compatible-feedback").textContent = "密钥已清除。";
+      } else {
+        await saveCompatible();
+        if (action === "save") $("#compatible-feedback").textContent = "模型配置已保存。";
+        else {
+          const result = await modelMessage(action);
+          if (action === "listCompatibleModels") {
+            $("#compatible-model-choice").innerHTML = '<option value="">请选择模型</option>' + result.models.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("");
+            $("#compatible-feedback").textContent = result.models.length ? `已读取 ${result.models.length} 个模型。` : "服务未提供模型列表；可手动填写模型名。";
+          } else $("#compatible-feedback").textContent = `自检通过 · JSON 有效 · ${(result.latencyMs / 1000).toFixed(1)} 秒${result.usage.totalTokens === null ? "" : ` · ${result.usage.totalTokens} tokens`}`;
+        }
+      }
+    } catch (error) { $("#compatible-feedback").textContent = error.message; }
+    finally { buttons.forEach((button) => { button.disabled = false; }); }
+  });
+}
 
 $("#test-ollama").addEventListener("click", async () => {
   const button = $("#test-ollama");

@@ -7,6 +7,7 @@ import { createBudgetUI } from "../shared/budget-ui.js";
 import { createPagedList } from "../shared/paged-ui.js";
 import { createBatchUI } from "../shared/batch-ui.js";
 import { createPalette } from "../shared/palette.js";
+import { createContextUI } from "./context-ui.js";
 
 const $ = (selector) => document.querySelector(selector);
 let searchTimer;
@@ -29,6 +30,7 @@ const sessionUI = createSessionUI($("#session-tools"), restoreUI, setFeedback, l
 const taskUI = createTaskUI($("#restore-tasks"), setFeedback, loadDashboard);
 const budgetUI = createBudgetUI($("#resource-budget"), setFeedback, loadDashboard);
 const batchUI = createBatchUI(setFeedback, loadDashboard);
+const contextUI = createContextUI($("#context-memory"), { restoreUI, createLocalModel });
 createPalette({ feedback: setFeedback, refresh: loadDashboard, restoreUI, batchUI, getDashboard: () => dashboard, saveButton: $("#save-workspace") });
 
 function resetAi() {
@@ -200,7 +202,7 @@ async function refreshDashboard() {
   aiWorkspaces = workspaces;
   workspaceUI.setData(aiWorkspaces, trash, await chrome.runtime.sendMessage({ type: "getWorkspaceBindings" }));
   sessionUI.setData(checkpoints, closed, data.settings);
-  await Promise.all([taskUI.update(), restoreUI.update()]);
+  await Promise.all([taskUI.update(), restoreUI.update(), contextUI.update()]);
   for (const [selector, html] of [
     ["#search-window", [...new Set(data.tabs.map((tab) => tab.windowId))].map((id) => `<option value="${id}">窗口 ${id}</option>`).join("")],
     ["#search-workspace", workspaces.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join("")]
@@ -220,7 +222,7 @@ async function refreshDashboard() {
   renderHealth(health);
   renderLifecycle(data.lifecycle);
   $("#sampling-coverage").textContent = `已采样 ${summary.jsHeapMeasuredTabs} / ${summary.jsHeapEligibleTabs} 个网页。每分钟轮转最多 25 页，同时测量不超过 4 页；立即更新可采样全部。JS 堆为估算值。`;
-  if (!aiPrepared && !aiBusy) $("#ai-status").textContent = settings.aiProvider === "ollama" ? "Ollama" : "浏览器内置";
+  if (!aiPrepared && !aiBusy) $("#ai-status").textContent = settings.aiProvider === "ollama" ? "Ollama" : settings.aiProvider === "compatible" ? "兼容 API" : "浏览器内置";
   $("#measure-resources").textContent = "立即更新";
   $("#candidate-count").textContent = dashboard.candidates.length ? `${dashboard.candidates.length} 项` : "无";
   $("#reclaim-summary").textContent = dashboard.summary.reclaimableMeasuredTabs
@@ -403,7 +405,7 @@ $("#preview-ai-input").addEventListener("click", async () => {
     if (!result?.ok) throw new Error(result?.reason || "无法准备分析输入。");
     aiPrepared = result;
     const { snapshot } = result;
-    $("#ai-input-summary").textContent = `${snapshot.pages.length} 页 · 接收方：${snapshot.recipient}`;
+    $("#ai-input-summary").textContent = `${snapshot.pages.length} 页 · 接收方：${snapshot.recipient} · 整理目标：${snapshot.request || "无"}`;
     $("#ai-input-pages").innerHTML = snapshot.pages.map((page) => `<div class="ai-page"><span>
       <strong>${page.pageId}. ${escapeHtml(page.title)}</strong><small>${escapeHtml(page.domain)} · ${escapeHtml(aiStateLabel(page.status))}</small></span></div>`).join("");
     $("#ai-input-preview").hidden = false;
@@ -452,11 +454,11 @@ $("#generate-ai-brief").addEventListener("click", async () => {
   $("#preview-ai-input").disabled = true;
   $("#ai-status").textContent = "生成中";
   output.className = "ai-brief";
-  output.textContent = "正在通过本地模型整理网页元数据…";
+  output.textContent = "正在通过所选模型整理网页元数据…";
   let session;
   try {
     let result;
-    if (prepared.provider === "ollama") {
+    if (prepared.provider !== "browser") {
       result = await chrome.runtime.sendMessage({ type: "generateAiThemes", snapshotId: prepared.snapshot.id });
     } else {
       result = await chrome.runtime.sendMessage({ type: "beginAiGeneration", snapshotId: prepared.snapshot.id });
@@ -478,7 +480,7 @@ $("#generate-ai-brief").addEventListener("click", async () => {
   } catch (error) {
     if (version !== aiVersion) return;
     output.className = "ai-brief empty-state";
-    output.textContent = `${error.message || "无法生成本地 AI 建议。"} 可重新预览后重试；本地搜索和 Popup 的按域名整理仍可使用。`;
+    output.textContent = `${error.message || "无法生成 AI 建议。"} 可重新预览后重试；本地搜索和 Popup 的按域名整理仍可使用。`;
     $("#ai-status").textContent = "不可用";
   } finally {
     session?.destroy?.();

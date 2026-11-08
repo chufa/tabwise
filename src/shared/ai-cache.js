@@ -12,7 +12,7 @@ function members(snapshot) {
 }
 
 export async function aiCacheKey(snapshot) {
-  const input = JSON.stringify([1, snapshot.provider, snapshot.endpoint, snapshot.model, snapshot.request,
+  const input = JSON.stringify([2, snapshot.provider, snapshot.endpoint, snapshot.model, snapshot.credentialRevision, snapshot.jsonMode, snapshot.request,
     members(snapshot).map((page) => page.key).sort()]);
   const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
   return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, "0")).join("");

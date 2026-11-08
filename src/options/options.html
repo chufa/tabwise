@@ -13,7 +13,7 @@
         <h1>休眠设置</h1>
         <p>选择适合你的自动策略。默认采用保守模式，避免对未知网页做自动操作。</p>
       </header>
-      <form id="settings-form">
+      <form id="settings-form" inert aria-busy="true">
         <section class="setting-group">
           <h2>自动策略</h2>
           <label class="mode-option" for="mode-conservative">
@@ -88,22 +88,38 @@
           <label class="field-label" for="closed-history-days"><span>保留天数（最多 100 页）</span><input id="closed-history-days" type="number" min="1" max="30" required></label>
         </section>
         <section class="setting-group">
-          <h2>本地 AI 提供方</h2>
+          <h2>AI 模型</h2>
           <label class="mode-option" for="ai-provider-browser">
             <input id="ai-provider-browser" name="ai-provider" type="radio" value="browser">
             <span><strong>浏览器内置模型</strong><small>使用 Chrome 支持的本地模型，不需要额外服务。</small></span>
           </label>
           <label class="mode-option" for="ai-provider-ollama">
             <input id="ai-provider-ollama" name="ai-provider" type="radio" value="ollama">
-            <span><strong>Ollama</strong><small>仅连接本机 loopback 地址，不上传页面正文或完整网址。</small></span>
+            <span><strong>Ollama</strong><small>仅连接本机服务。任务续接发送您选定并预览的笔记和片段。</small></span>
+          </label>
+          <label class="mode-option" for="ai-provider-compatible">
+            <input id="ai-provider-compatible" name="ai-provider" type="radio" value="compatible">
+            <span><strong>OpenAI 兼容 API</strong><small>自行填写兼容服务的地址和模型；生成前会展示接收方和完整输入。</small></span>
           </label>
           <div id="browser-model-check" class="connection-row"><button id="test-browser-model" type="button">自检浏览器模型</button><span id="browser-model-feedback" role="status"></span></div>
           <div id="ollama-config" class="ollama-config" hidden>
-            <label class="field-label" for="ollama-endpoint"><span>Ollama 地址</span><input id="ollama-endpoint" type="url" inputmode="url" maxlength="120" placeholder="http://127.0.0.1:11434"></label>
-            <label class="field-label" for="ollama-model"><span>模型名</span><input id="ollama-model" type="text" maxlength="120" placeholder="例如：qwen3:8b"></label>
+            <label class="field-label" for="ollama-endpoint"><span>Ollama 地址</span><input id="ollama-endpoint" type="url" inputmode="url" maxlength="120" placeholder="填写本机 HTTP 地址和端口"></label>
+            <label class="field-label" for="ollama-model"><span>模型名</span><input id="ollama-model" type="text" maxlength="120" placeholder="填写已安装的模型名"></label>
             <label class="field-label" for="ollama-model-choice"><span>已安装模型</span><select id="ollama-model-choice"><option value="">运行自检以加载列表</option></select></label>
             <p class="section-copy">自检使用上方地址与模型，检查扩展来源、文本生成能力和小型 JSON 推理，不发送网页数据。冷启动最多等待 90 秒。</p>
             <div class="connection-row"><button id="test-ollama" type="button">模型自检</button><span id="ollama-feedback" role="status"></span></div>
+          </div>
+          <div id="compatible-config" class="ollama-config" hidden>
+            <label class="field-label" for="compatible-endpoint"><span>API 基础地址</span><input id="compatible-endpoint" type="url" maxlength="300" placeholder="填写兼容 API 基础地址"></label>
+            <label class="field-label" for="compatible-model"><span>API 模型</span><input id="compatible-model" type="text" maxlength="120" placeholder="输入服务支持的模型名"></label>
+            <label class="field-label" for="compatible-model-choice"><span>服务模型列表</span><select id="compatible-model-choice"><option value="">点击读取模型列表</option></select></label>
+            <label class="field-label" for="compatible-key"><span>API Key（留空保留已有密钥）</span><input id="compatible-key" type="password" autocomplete="new-password" spellcheck="false" maxlength="512" placeholder="本机无认证服务可留空"></label>
+            <p id="credential-status" class="section-copy" role="status"></p>
+            <label class="switch-row" for="persist-model-key"><span><strong>在本机记住密钥</strong><small>默认仅当前浏览器会话有效；勾选后保存到扩展本地存储，未加密。不进入备份或同步。</small></span><input id="persist-model-key" type="checkbox"></label>
+            <label class="switch-row" for="compatible-json"><span><strong>请求 JSON 模式</strong><small>服务不支持 JSON 模式时可关闭；返回结果仍须通过本地结构校验。</small></span><input id="compatible-json" type="checkbox" checked></label>
+            <p class="section-copy">地址填写到 /v1 等基础路径，无需 /chat/completions。远程服务要求 HTTPS，本机 HTTP 需明确端口。保存不发送任务资料；自检只发送小型 JSON 请求，可能产生服务费用。</p>
+            <div class="connection-row"><button id="save-compatible" type="button">保存模型配置</button><button id="list-compatible" type="button">读取模型列表</button><button id="test-compatible" type="button">保存并自检</button><button id="clear-model-key" type="button">清除密钥</button></div>
+            <p id="compatible-feedback" class="section-copy" role="status"></p>
           </div>
         </section>
         <section class="setting-group">
@@ -140,7 +156,7 @@
       </form>
       <section class="privacy-note">
         <h2>本地优先</h2>
-        <p>默认将设置、工作区快照和休眠记录保存在浏览器本地。主动同步会将工作区网址、标签和站点列表写入浏览器同步存储；备注留在本机。模型输入不包含完整网址、页面正文、Cookie 或表单内容。</p>
+        <p>设置、工作区快照和任务记忆保存在浏览器本地。主动同步会同步工作区网址、标签和站点列表，备注与任务留在本机。AI 仅在您主动生成时接收预览中的内容，包括选定的手动笔记和片段；不自动采集正文，不发送完整网址、Cookie 或表单内容。</p>
         <div class="backup-actions"><button id="clear-local-history" class="secondary" type="button">清除本地历史</button><span id="history-feedback" role="status"></span></div>
       </section>
       <section class="privacy-note" aria-labelledby="reliability-title">

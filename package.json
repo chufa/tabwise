@@ -7,6 +7,9 @@
     "test": "node --test test/*.test.js",
     "test:e2e": "node test/extension.e2e.mjs",
     "test:edge": "node test/edge.e2e.mjs",
+    "test:context": "node test/context-memory.smoke.mjs",
+    "test:model": "node test/compatible-model.smoke.mjs",
+    "test:ollama:live": "node test/ollama.live.mjs",
     "check": "node test/check.mjs"
   },
   "devDependencies": {

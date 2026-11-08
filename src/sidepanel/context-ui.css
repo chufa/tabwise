@@ -1,0 +1,42 @@
+#context-memory { margin-bottom: 24px; padding-bottom: 18px; border-bottom: 1px solid var(--saved-line); }
+#context-memory .section-heading h2 { margin: 0; font-size: 16px; }
+#context-memory h3 { margin: 20px 0 8px; font-size: 13px; }
+.context-list { margin: 12px 0; max-height: 250px; overflow: auto; }
+.context-row { padding: 10px 0; border-bottom: 1px solid var(--saved-line); }
+.context-row > button { display: block; max-width: 100%; text-align: left; font-size: 12px; }
+.context-row small { display: block; margin-top: 5px; }
+.context-fields { display: grid; gap: 12px; margin: 14px 0; }
+.context-fields label, .context-draft label { display: grid; gap: 5px; }
+.context-fields textarea { min-height: 76px; line-height: 1.6; }
+.context-source { padding: 12px 0; border-bottom: 1px solid var(--saved-line); }
+.context-source > label { display: flex; gap: 8px; align-items: flex-start; }
+.context-source input[type=checkbox] { margin-top: 4px; }
+.context-source details { margin-top: 8px; }
+.context-source small { display: block; margin-top: 3px; }
+.context-source a, .context-citations a { color: var(--saved-action); text-underline-offset: 3px; }
+.context-source a:focus-visible, .context-citations a:focus-visible { outline: 2px solid var(--saved-action); outline-offset: 2px; }
+.context-source summary { cursor: pointer; color: var(--saved-action); }
+.context-source textarea { margin: 6px 0 10px; }
+.context-picker, .context-preview { margin: 14px 0; padding: 12px; background: var(--saved-panel); }
+.context-preview dl { margin: 10px 0; }
+.context-preview dt { font-weight: 700; margin-top: 10px; }
+.context-preview dd, .context-accepted p { white-space: pre-wrap; }
+.context-preview dd { margin: 4px 0 0; }
+.context-preview .context-input-source { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--saved-line); }
+.context-preview summary { cursor: pointer; font-weight: 700; }
+.context-draft .context-confirm { display: flex; gap: 8px; align-items: flex-start; }
+.context-confirm input[type=checkbox] { flex: 0 0 auto; margin: 4px 0 0; }
+.context-draft textarea { line-height: 1.6; margin-bottom: 8px; }
+.context-draft legend { padding: 0; font-weight: 700; }
+.context-draft fieldset { padding: 0; border: 0; margin: 14px 0; min-width: 0; }
+.context-citations { color: var(--saved-muted); margin: 4px 0 10px; }
+.context-accepted { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--saved-line); }
+.context-accepted ul { padding-left: 18px; }
+.context-accepted li { margin: 8px 0; }
+.context-notice { min-height: 18px; color: var(--saved-action); }
+.context-notice.is-error { color: #a13c35; }
+#context-memory textarea { caret-color: var(--saved-action); }
+#context-memory textarea::placeholder { color: var(--saved-muted); }
+#context-memory ::selection { background: var(--saved-panel); color: inherit; }
+#context-memory .context-list, #context-memory .paged-rows { scrollbar-width: thin; scrollbar-color: var(--saved-muted) transparent; }
+@media (prefers-color-scheme: dark) { .context-notice.is-error { color: #ffb4ad; } }

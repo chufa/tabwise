@@ -26,16 +26,44 @@ export async function verifyReliability({ context, control, fixture, extensionUr
   assert.equal(fixture.hits.get("preset-b") || 0, 0);
 
   // Duplicate preview revalidates keeper navigation and cannot be replayed.
+  const readinessWorker = await waitForWorker(context);
+  await readinessWorker.evaluate(() => {
+    globalThis.__duplicateCompletionTimes = {};
+    globalThis.__duplicateCompletionListener = (id, change, tab) => {
+      if (change.status === "complete" && tab.url?.endsWith("/duplicate-fault")) globalThis.__duplicateCompletionTimes[id] = Date.now();
+    };
+    chrome.tabs.onUpdated.addListener(globalThis.__duplicateCompletionListener);
+  });
   const pages = await Promise.all([context.newPage(), context.newPage(), context.newPage()]);
   for (const page of pages) await page.goto(`${fixture.baseUrl}/duplicate-fault`);
   await control.bringToFront();
   const ids = (await control.evaluate(() => chrome.tabs.query({}))).filter((tab) => tab.url.endsWith("/duplicate-fault")).map((tab) => tab.id);
+  await waitForBrowserState(control, async (ids) => {
+    const tabs = (await chrome.tabs.query({})).filter((tab) => ids.includes(tab.id));
+    return tabs.length === 3 && tabs.every((tab) => !tab.active && tab.status === "complete" && !tab.pendingUrl);
+  }, ids);
+  const completedAt = await readinessWorker.evaluate((ids) => Object.fromEntries(ids.map((id) => [id, globalThis.__duplicateCompletionTimes[id]])), ids);
+  assert.ok(ids.every((id) => completedAt[id]), "completion events were observed");
+  // Creation/activation writes can satisfy a navigation-start timestamp before
+  // the completion handler writes activity. Wait for the actual completed event.
+  await waitForBrowserState(control, async ({ ids, startedAt }) => {
+    const { lastActivity = {} } = await chrome.storage.session.get("lastActivity");
+    return ids.every((id) => lastActivity[id] >= startedAt[id]);
+  }, { ids, startedAt: completedAt });
+  await readinessWorker.evaluate(() => {
+    chrome.tabs.onUpdated.removeListener(globalThis.__duplicateCompletionListener);
+    delete globalThis.__duplicateCompletionListener; delete globalThis.__duplicateCompletionTimes;
+  });
   const preview = await message(control, "prepareDuplicateConsolidation", { tabIds: ids });
   assert.equal(preview.pages.length, 2);
   await control.evaluate(({ id, url }) => chrome.tabs.update(id, { url }), { id: preview.pages[0].keepTabId, url: `${fixture.baseUrl}/keeper-changed` });
   const skipped = await message(control, "consolidateDuplicates", { previewId: preview.id, indices: [0, 1], confirm: true });
   assert.equal(skipped.count, 0);
   assert.equal((await message(control, "consolidateDuplicates", { previewId: preview.id, indices: [0], confirm: true })).ok, false);
+  await waitForBrowserState(control, async ({ id, url }) => {
+    const tab = await chrome.tabs.get(id);
+    return tab.url === url && tab.status === "complete" && !tab.pendingUrl;
+  }, { id: preview.pages[0].keepTabId, url: `${fixture.baseUrl}/keeper-changed` });
   const next = await message(control, "prepareDuplicateConsolidation", { tabIds: ids });
   assert.equal(next.pages.length, 1);
   assert.equal((await message(control, "consolidateDuplicates", { previewId: next.id, indices: [0], confirm: true })).count, 1);

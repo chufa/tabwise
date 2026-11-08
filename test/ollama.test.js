@@ -19,10 +19,10 @@ test("accepts only local Ollama endpoints", () => {
 });
 
 test("builds bounded non-streaming Ollama requests", () => {
-  const request = buildOllamaRequest("整理标签", "qwen3:8b");
+  const request = buildOllamaRequest("整理标签", "fixture:latest");
 
   assert.deepEqual(request, {
-    model: "qwen3:8b",
+    model: "fixture:latest",
     prompt: "整理标签",
     stream: false,
     options: { temperature: 0.2, num_predict: 900 }
@@ -31,7 +31,7 @@ test("builds bounded non-streaming Ollama requests", () => {
 
 test("structured theme requests spend the output budget on JSON instead of thinking", () => {
   const schema = { type: "object" };
-  const request = buildOllamaRequest("主题输入", "qwen3.8:27b-mlx", schema);
+  const request = buildOllamaRequest("主题输入", "fixture-large", schema);
   assert.equal(request.think, false);
   assert.equal(request.format, schema);
   assert.equal(request.stream, false);
