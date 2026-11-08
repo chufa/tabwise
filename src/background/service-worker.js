@@ -1,7 +1,8 @@
 import { ALARM_NAME, ALARM_PERIOD_MINUTES, CHECKPOINT_ALARM_NAME, CHECKPOINT_PERIOD_MINUTES, RESOURCE_REVIEW_ALARM_NAME, SUSPENDED_PAGE, SUSPENSION_MODES, SUSPENSION_STATES, SUSPENSION_STRATEGIES } from "../shared/constants.js";
 import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isIdleLongEnough, isSuspendableUrl, isSuspendedUrl, normalizeDomain, planLocalOrganization, sitePolicyForUrl, smartSuspensionBlockReason, suspensionBlockReason } from "../shared/policy.js";
 import { addRecentSuspension, addRecoveryCheckpoint, addWorkspace, applySyncMetadata, clearDiagnostics, clearLocalHistory, getActivity, getDiagnostics, getObservedAt, getRecentSuspensions, getRecord, getRecords, getRecoveryCheckpoints, getResourceReviews, getResourceSnapshots, getSettings, getSyncHistory, getWorkspaces, migrateStorage, previewSyncMetadata, putRecord, removeActivity, removePrimaryRecord, removeRecentSuspension, removeRecord, removeRecordsForTab, removeResourceSnapshot, reportDiagnostic, restoreSyncHistory, saveResourceSnapshots, saveSettings, syncMetadata, touchTab } from "../shared/storage.js";
-import { buildSuspendCandidate, createPageIndex } from "../shared/search.js";
+import { buildSuspendCandidate, createPageIndex, searchPageMemory } from "../shared/search.js";
+import { createBrowserHistory } from "./browser-history.js";
 import { summarizeHeapSnapshots } from "../shared/resource.js";
 import { buildResourceReclaimPlan } from "../shared/insights.js";
 import { isExtensionPage, resolvePopupSender } from "../shared/extension-page.js";
@@ -52,6 +53,8 @@ globalThis.addEventListener?.("error", (event) => reportWorkerError(event.error 
 globalThis.addEventListener?.("unhandledrejection", (event) => reportWorkerError(event.reason));
 const pageTracker = createPageTracker(extensionOrigin);
 const pageIndex = createPageIndex();
+const historyIndex = createPageIndex();
+const browserHistory = createBrowserHistory({ getSettings, changeSettings, changed: () => { historyIndex.replace([]); stateChanged(); } });
 let searchVersion = 0;
 let indexedVersion = -1;
 let indexedAt = 0;
@@ -69,6 +72,7 @@ function stateChanged(indexChanged = true) {
   }, 150);
 }
 chrome.storage.onChanged?.addListener((changes) => {
+  if (changes.settings) browserHistory.invalidate();
   const indexKeys = ["workspaces", "recoveryCheckpoints", "recentSuspensions", "closedPages", "suspensionRecords", "suspensionRestoreRecords", "lastActivity", "settings"];
 const displayKeys = [...indexKeys, "resourceSnapshots", "resourceReviews", "operationJournal", "restoreTasks", "batchTasks", "workspaceBindings", "temporaryTabProtection", "effectHistory", "backupManagement", "contextTasks"];
   if (Object.keys(changes).some((key) => displayKeys.includes(key))) stateChanged(Object.keys(changes).some((key) => indexKeys.includes(key)));
@@ -404,6 +408,8 @@ function sanitizeSettings(current, update) {
     resourceBudgetHeapMB: Number.isFinite(Number(update.resourceBudgetHeapMB)) ? Math.min(65536, Math.max(64, Math.round(Number(update.resourceBudgetHeapMB)))) : current.resourceBudgetHeapMB,
     closedHistoryEnabled: typeof update.closedHistoryEnabled === "boolean" ? update.closedHistoryEnabled : current.closedHistoryEnabled,
     closedHistoryDays: Number.isFinite(Number(update.closedHistoryDays)) ? Math.min(30, Math.max(1, Math.round(Number(update.closedHistoryDays)))) : current.closedHistoryDays,
+    // History opt-in is changed only by the permission-checked search command.
+    browserHistorySearchEnabled: current.browserHistorySearchEnabled === true,
     trustedDomains: Array.isArray(update.trustedDomains) ? normalizeList(update.trustedDomains) : current.trustedDomains,
     blockedDomains: Array.isArray(update.blockedDomains) ? normalizeList(update.blockedDomains) : current.blockedDomains,
     pauseUntil: Number.isFinite(pauseUntil) && pauseUntil > Date.now() ? pauseUntil : 0
@@ -855,6 +861,7 @@ function buildPageMemory(dashboard, workspaces, checkpoints, recent, closed = []
     status: tab.suspended ? "suspended" : tab.status,
     source: tab.suspended ? "suspended" : "open",
     tabId: tab.id,
+    active: tab.active,
     recordId: tab.recordId,
     lastAccessed: tab.lastAccessed,
     windowId: tab.windowId
@@ -903,13 +910,13 @@ function buildPageMemory(dashboard, workspaces, checkpoints, recent, closed = []
   return [...new Map(pages.map((page) => [`${page.source}:${page.id}`, page])).values()];
 }
 
-async function searchPages(query, limit, options = {}) {
+async function searchPages(query, limit, options = {}, allowHistory = true) {
   const settings = await getSettings();
   if (indexedVersion !== searchVersion || Date.now() - indexedAt >= 60_000) {
     if (!indexBuild) indexBuild = (async () => {
     const version = searchVersion;
     const [tabs, workspaces, checkpoints, recent, closed] = await Promise.all([logicalTabs(), getWorkspaces(), getRecoveryCheckpoints(), getRecentSuspensions(), getClosedPages()]);
-    const dashboard = { tabs: tabs.filter((tab) => !tab.incognito).map((tab) => ({
+    const dashboard = { tabs: tabs.filter((tab) => !tab.incognito && /^https?:\/\//i.test(tab.logicalUrl || "")).map((tab) => ({
       ...tab, url: tab.logicalUrl, domain: domainForUrl(tab.logicalUrl), suspended: Boolean(tab.recordId || tab.discarded),
       status: tab.recordId || tab.discarded ? "suspended" : tab.active || tab.pinned || tab.audible ? "protected" : "open"
     })) };
@@ -919,11 +926,16 @@ async function searchPages(query, limit, options = {}) {
     })().finally(() => { indexBuild = null; });
     await indexBuild;
   }
-  return pageIndex.search(query, limit, { ...options, semantic: settings.semanticSearch, deduplicate: options.deduplicate === true });
+  const history = allowHistory ? await browserHistory.snapshot() : { pages: [], status: { state: "off", count: 0 } };
+  if (allowHistory) historyIndex.replace(history.pages);
+  const result = searchPageMemory([...pageIndex.pages(), ...(allowHistory ? historyIndex.pages() : [])], query, limit,
+    { ...options, semantic: settings.semanticSearch, deduplicate: options.deduplicate === true });
+  return options.withTotal ? { ok: true, ...result, historyStatus: history.status } : result;
 }
 
 async function openSearchResult(result) {
   if (!result || typeof result !== "object") return { ok: false, reason: "搜索结果无效" };
+  if (result.source === "history") return openSavedPage(await browserHistory.resolve(result));
   if (result.source === "open") {
     const tab = await chrome.tabs.get(result.tabId);
     if (result.url && tab.url !== result.url) throw new Error("标签页已导航到其他页面，请重新搜索。");
@@ -962,7 +974,7 @@ async function openSearchResult(result) {
 }
 
 async function openSavedPage(page) {
-  const existing = (await logicalTabs()).find((tab) => tab.logicalUrl === page.url);
+  const existing = (await logicalTabs()).find((tab) => !tab.incognito && tab.logicalUrl === page.url);
   if (existing) {
     if (existing.recordId) {
       const result = await restoreRecord(existing.recordId);
@@ -1164,7 +1176,7 @@ chrome.commands.onCommand.addListener((command) => {
 chrome.omnibox.onInputChanged.addListener((text, suggest) => {
   searchPages(text, 6)
     .then((results) => suggest(results.map((result) => ({
-      content: JSON.stringify({ id: result.id, source: result.source, url: result.url, tabId: result.tabId, recordId: result.recordId, workspaceId: result.workspaceId, checkpointId: result.checkpointId, closedId: result.closedId }),
+      content: JSON.stringify({ id: result.id, source: result.source, url: result.url, tabId: result.tabId, recordId: result.recordId, workspaceId: result.workspaceId, checkpointId: result.checkpointId, closedId: result.closedId, historyId: result.historyId }),
       description: `<match>${escapeOmniboxText(result.title)}</match> <dim>${escapeOmniboxText(result.domain || result.source)}</dim>`
     }))))
     .catch(() => suggest([]));
@@ -1290,6 +1302,14 @@ function handleMessage(message, sender, sendResponse) {
     aiTasks[message.type]().then(sendResponse).catch((error) => sendResponse({ ok: false, reason: error.message }));
     return true;
   }
+  const searchUi = ["src/sidepanel/sidepanel.html", "src/popup/popup.html", "src/options/options.html"].some((path) => isExtensionPage(sender, path));
+  if ((["searchPageCatalog", "setHistorySearch"].includes(message.type) || message.type === "openSearchResult" && message.result?.source === "history") && !searchUi) {
+    sendResponse({ ok: false, reason: "请从 TabWise 查询页面操作。" });
+    return false;
+  }
+  const searchFilters = message.filters || message;
+  const filters = { source: searchFilters.source, status: searchFilters.status, workspaceId: searchFilters.workspaceId,
+    windowId: searchFilters.windowId, deduplicate: searchFilters.deduplicate === true };
   const tasks = {
     getDashboard,
     getHealth,
@@ -1319,9 +1339,9 @@ function handleMessage(message, sender, sendResponse) {
     undoOperation: () => runOperation(() => journal.undo(message.operationId)),
     enableResourceSampling,
     testOllamaConnection: () => testOllamaConnection(message),
-    searchPages: () => searchPages(message.query, message.limit, message.filters || {
-      source: message.source, status: message.status, workspaceId: message.workspaceId, windowId: message.windowId, deduplicate: message.deduplicate
-    }),
+    searchPages: () => searchPages(message.query, message.limit, filters, searchUi),
+    searchPageCatalog: () => searchPages(message.query, message.limit, { ...filters, deduplicate: true, includeEmpty: true, withTotal: true, offset: message.offset }, searchUi),
+    setHistorySearch: () => browserHistory.setEnabled(message.enabled === true),
     openSearchResult: () => openSearchResult(message.result),
     getSuspendedRecord: () => getSuspendedRecordForSender(message.recordId, sender),
     suspendTab: () => suspendTab(message.tabId),

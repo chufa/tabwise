@@ -71,6 +71,12 @@ main { margin-top: 18px; }
 .result-copy strong, .result-copy span, .timeline-item strong, .timeline-item span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .result-copy strong, .timeline-item strong { color: #173042; font-size: 12px; line-height: 1.4; }
 .result-copy span, .timeline-item span { margin-top: 3px; color: #657b86; font-size: 12px; }
+.history-search-control { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--ui-line, #dbe5e8); }
+.history-search-control > div { flex: 1; min-width: 0; }
+.history-search-control strong { font-size: 12px; }
+.history-search-control .hint { margin-bottom: 0; }
+.search-summary { margin: 8px 0; font-size: 12px; color: inherit; }
+.search-pagination { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; font-size: 12px; }
 .badge, .timeline-kind { flex: 0 0 auto; color: #087268; font-size: 11px; font-weight: 760; }
 .resource-value { flex: 0 0 auto; color: #12655f; font-size: 12px; font-variant-numeric: tabular-nums; font-weight: 780; }
 .action-button { flex: 0 0 auto; border: 1px solid #b9ccd2; border-radius: 6px; padding: 6px 8px; background: #fff; color: #12655f; font-size: 11px; font-weight: 760; transition: background .16s ease-out, border-color .16s ease-out; }

@@ -10,6 +10,7 @@
     "test:context": "node test/context-memory.smoke.mjs",
     "test:ui": "node test/ui.smoke.mjs",
     "test:popup": "node test/popup-action.smoke.mjs",
+    "test:history": "node test/history-search.smoke.mjs",
     "test:model": "node test/compatible-model.smoke.mjs",
     "test:ollama:live": "node test/ollama.live.mjs",
     "check": "node test/check.mjs"

@@ -32,6 +32,9 @@ let onSample;
 let failBackupWrite = false;
 let failFinalRecord = false;
 let permissionGranted = true;
+let historyPermission = false;
+let nativeHistory = [];
+let nativeVisits = [];
 let bytesUsed = 0;
 const alarms = new Map();
 globalThis.chrome = {
@@ -40,7 +43,10 @@ globalThis.chrome = {
   alarms: { onAlarm: event(), get: async (id) => alarms.get(id), clear: async (id) => alarms.delete(id), create: async (id, value) => alarms.set(id, value) },
   commands: { onCommand: event() },
   omnibox: { onInputChanged: event(), onInputEntered: event() },
-  permissions: { contains: async () => permissionGranted },
+  permissions: { contains: async (request) => request.permissions?.includes("history") ? historyPermission : permissionGranted,
+    onAdded: event(), onRemoved: event() },
+  history: { search: async () => structuredClone(nativeHistory), getVisits: async () => structuredClone(nativeVisits),
+    onVisited: event(), onVisitRemoved: event() },
   windows: { getLastFocused: async () => ({ id: 1 }), update: async () => ({}) },
   tabs: {
     onActivated: event(), onDetached: event(), onRemoved: event(), onUpdated: event(),
@@ -513,4 +519,52 @@ test("concurrent restore retry and resume create only one successor and do not r
   await settle(() => stores.session.restoreTasks.find((item) => item.id === child.taskId)?.status === "completed");
   assert.equal(tabs.length, 1);
   assert.equal((await message("getRestoreTask", { taskId: "concurrent-parent" })).retryable, false);
+});
+
+test("history catalog stays local, paginates, validates native visits and refuses webpage senders", async () => {
+  const now = Date.now();
+  const url = "https://history-catalog.test/shared";
+  tabs = [{ id: 900, windowId: 1, url, title: "Current title", active: true }];
+  stores.local.settings = { autoSuspend: false, resourceSampling: false };
+  stores.local.workspaces = [{ id: "history-shared", name: "Shared", createdAt: now, tabs: [{ url, title: "Saved title" }] }];
+  historyPermission = false;
+  assert.equal((await message("setHistorySearch", { enabled: true })).ok, false);
+  historyPermission = true;
+  nativeHistory = [{ id: "shared", url, title: "历史浏览器研究", lastVisitTime: now },
+    ...Array.from({ length: 65 }, (_, index) => ({ id: `native-${index}`, url: `https://history-catalog.test/${index}`, title: `历史浏览器研究 ${index}`, lastVisitTime: now - 1000 })),
+    { id: "old", url: "https://history-catalog.test/old", title: "历史浏览器研究", lastVisitTime: now - 15 * 86_400_000 }];
+  chrome.tabs.onUpdated.emit(900, { title: "Current title" }, tabs[0]);
+  await message("setHistorySearch", { enabled: true });
+  await message("updateSettings", { settings: { autoSuspend: false } });
+  assert.equal(stores.local.settings.browserHistorySearchEnabled, true);
+  const catalog = await message("searchPageCatalog", { query: "liulanqi", limit: 30 });
+  assert.equal(catalog.total, 66);
+  const shared = catalog.results.find((page) => page.url === url);
+  assert.deepEqual(new Set(shared.sources.map((page) => page.source)), new Set(["history", "open", "workspace"]));
+  assert.equal((await message("searchPageCatalog", { query: "liulanqi", offset: 60 })).results.length, 6);
+  const outsider = { ...sender, url: "https://untrusted.test/", tab: { id: 900 } };
+  assert.equal((await message("searchPageCatalog", {}, outsider)).ok, false);
+  assert.equal((await message("setHistorySearch", { enabled: false }, outsider)).ok, false);
+  assert.deepEqual(await message("searchPages", { query: "liulanqi", filters: { source: "history", includeHistory: true } }, outsider), []);
+  const simultaneous = await Promise.all([message("searchPages", { query: "liulanqi", source: "history" }, outsider),
+    message("searchPageCatalog", { query: "liulanqi" })]);
+  assert.deepEqual(simultaneous[0], []);
+  assert.equal(simultaneous[1].total, 66);
+  nativeVisits = [{ visitTime: now }];
+  const before = tabs.length;
+  assert.equal((await message("openSearchResult", { result: shared })).focused, true);
+  assert.equal(tabs.length, before);
+  assert.equal((await message("openSearchResult", { result: shared }, outsider)).ok, false);
+  nativeVisits = [];
+  assert.equal((await message("openSearchResult", { result: shared })).ok, false);
+  assert.equal(tabs.length, before);
+  const dashboard = await message("getDashboard");
+  assert.ok(!JSON.stringify(dashboard).includes("native-64"));
+  assert.ok(!JSON.stringify(stores).includes("native-64"));
+  historyPermission = false;
+  chrome.permissions.onRemoved.emit({ permissions: ["history"] });
+  const revoked = await message("searchPageCatalog", { query: "liulanqi" });
+  assert.equal(revoked.historyStatus.state, "permission-required");
+  assert.equal(revoked.total, 0);
+  await message("setHistorySearch", { enabled: false });
 });

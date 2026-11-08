@@ -85,6 +85,7 @@ export function createPageIndex() {
   let compiled = 0;
   return {
     stats: () => ({ size: entries.size, compiled }),
+    pages: () => [...entries.values()].map((entry) => entry.page),
     replace(pages) {
       const ids = new Set();
       for (const page of pages) {
@@ -131,8 +132,8 @@ export function sortTabs(tabs, sort = "recent") {
 
 export function searchPageMemory(pages, query, limit = 30, options = {}) {
   const groups = queryGroups(query, Boolean(options.semantic));
-  if (!groups.length) return [];
-  const newestAccess = Math.max(...pages.map((page) => Number(page.lastAccessed || page.createdAt || 0)), 0);
+  if (!groups.length && !options.includeEmpty) return options.withTotal ? { results: [], total: 0 } : [];
+  const newestAccess = pages.reduce((newest, page) => Math.max(newest, Number(page.lastAccessed || page.createdAt || 0)), 0);
 
   const filtered = pages.filter((page) => (!options.source || options.source === "all" || page.source === options.source)
     && (!options.workspaceId || page.workspaceId === options.workspaceId)
@@ -157,19 +158,29 @@ export function searchPageMemory(pages, query, limit = 30, options = {}) {
       return {
         ...page,
         score,
-        matchKind: titleScore >= 40 ? "fuzzy" : "path",
+        matchKind: !groups.length ? "recent" : titleScore >= 40 ? "fuzzy" : "path",
         related: Boolean(options.semantic && matchedTerms.some((term, index) => !groups[index].slice(0, 1).includes(term)))
       };
     })
     .filter(Boolean)
     .sort((left, right) => right.score - left.score || Number(right.lastAccessed || 0) - Number(left.lastAccessed || 0));
+  // Preserve every source for a matched URL, even when an older title was the
+  // only matching title. Keep the matching primary result for open validation.
+  const provenance = new Map();
+  if (options.deduplicate) for (const page of filtered) {
+    const source = { id: page.id, source: page.source, workspaceId: page.workspaceId, workspaceName: page.workspaceName,
+      checkpointId: page.checkpointId, tabId: page.tabId, windowId: page.windowId, status: page.status,
+      active: page.active, lastAccessed: page.lastAccessed, lastVisited: page.lastVisited };
+    if (!provenance.has(page.url)) provenance.set(page.url, []);
+    provenance.get(page.url).push(source);
+  }
   const results = options.deduplicate ? [...ranked.reduce((map, page) => {
-    const existing = map.get(page.url);
-    if (existing) existing.sources.push({ id: page.id, source: page.source, workspaceId: page.workspaceId, workspaceName: page.workspaceName, checkpointId: page.checkpointId });
-    else map.set(page.url, { ...page, sources: [{ id: page.id, source: page.source, workspaceId: page.workspaceId, workspaceName: page.workspaceName, checkpointId: page.checkpointId }] });
+    if (!map.has(page.url)) map.set(page.url, { ...page, sources: provenance.get(page.url) });
     return map;
   }, new Map()).values()] : ranked;
-  return results.slice(0, Math.min(100, Math.max(1, Number(limit) || 30)));
+  const offset = Math.max(0, Math.floor(Number(options.offset) || 0));
+  const selected = results.slice(offset, offset + Math.min(100, Math.max(1, Number(limit) || 30)));
+  return options.withTotal ? { results: selected, total: results.length } : selected;
 }
 
 export function buildSuspendCandidate(tab, now = Date.now(), idleMinutes = 30) {

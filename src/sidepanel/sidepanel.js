@@ -17,6 +17,10 @@ createNavigation(document.body, { hash: true });
 createNavigation(document.querySelector('[data-navigation="pages"]'));
 let searchTimer;
 let searchVersion = 0;
+let searchPage = 0;
+let historyEnabled = false;
+let historyBusy = false;
+const SEARCH_PAGE_SIZE = 30;
 let dashboard;
 let aiPrepared;
 let aiVersion = 0;
@@ -107,22 +111,27 @@ function renderHealth(health) {
 }
 
 function pageRow(page) {
-  const sourceLabels = { open: "打开页面", suspended: "休眠记录", workspace: "工作区", checkpoint: "恢复点", closed: "最近关闭" };
-  const sources = [...new Set((page.sources || [page]).map((item) => item.workspaceName ? `工作区：${item.workspaceName}` : sourceLabels[item.source] || item.source))];
+  const sourceLabels = { open: "打开页面", suspended: "休眠页面", workspace: "工作区", checkpoint: "恢复点", recent: "最近休眠", closed: "最近关闭", history: "浏览历史" };
+  const provenance = page.sources || [page];
+  const sources = [...new Set(provenance.map((item) => item.workspaceName ? `工作区：${item.workspaceName}` : sourceLabels[item.source] || item.source))];
+  const live = provenance.find((item) => item.source === "open") || provenance.find((item) => item.source === "suspended");
+  const lastVisited = Math.max(0, ...provenance.map((item) => Number(item.lastVisited || 0)));
   const state = {
     open: "已打开",
     suspended: "休眠中",
     saved: "已保存",
-    protected: "已保护"
-  }[page.status] || page.source;
+    protected: "已保护",
+    visited: "浏览历史"
+  }[live?.status || page.status] || page.source;
   return `<article class="result">
     <div class="result-copy">
       <strong title="${escapeHtml(page.title)}">${highlightMatch(page.title, $("#page-search").value)}</strong>
       <span title="${escapeHtml(page.url)}">${highlightMatch(page.url, $("#page-search").value)}</span>
       <span>${escapeHtml(sources.join(" · "))}</span>
+      ${lastVisited ? `<span title="${escapeHtml(new Date(lastVisited).toLocaleString())}">上次访问：${escapeHtml(relativeTime(lastVisited))}</span>` : ""}
     </div>
     <span class="badge">${escapeHtml(state)}</span>
-    <button class="action-button" data-action="open-result" data-result="${escapeHtml(JSON.stringify(page))}" type="button">打开</button>
+    <button class="action-button" data-action="open-result" data-result="${escapeHtml(JSON.stringify(page))}" type="button">${live?.source === "open" ? "切换" : live?.source === "suspended" ? "恢复" : "打开"}</button>
   </article>`;
 }
 
@@ -276,26 +285,67 @@ async function refreshDashboard() {
 async function search() {
   const version = ++searchVersion;
   const query = $("#page-search").value.trim();
-  if (!query) {
-    $("#search-results").className = "results empty-state";
-    $("#search-results").textContent = "输入关键词开始查找。";
-    return;
-  }
-  const results = await chrome.runtime.sendMessage({ type: "searchPages", query, limit: 30, deduplicate: true,
+  $("#search-results").setAttribute("aria-busy", "true");
+  const catalog = await chrome.runtime.sendMessage({ type: "searchPageCatalog", query, limit: SEARCH_PAGE_SIZE, offset: searchPage * SEARCH_PAGE_SIZE,
     source: $("#search-source").value, status: $("#search-status").value, windowId: $("#search-window").value, workspaceId: $("#search-workspace").value });
   if (version !== searchVersion) return;
+  $("#search-results").setAttribute("aria-busy", "false");
+  if (!catalog.ok) throw new Error(catalog.reason || "搜索暂时不可用");
+  const { results, total, historyStatus } = catalog;
+  const pages = Math.max(1, Math.ceil(total / SEARCH_PAGE_SIZE));
+  if (searchPage >= pages) { searchPage = pages - 1; return search(); }
+  historyEnabled = !["off", "permission-required"].includes(historyStatus.state);
+  $("#toggle-history-search").textContent = historyEnabled ? "关闭" : "开启";
+  $("#toggle-history-search").disabled = historyBusy;
+  $("#history-search-status").textContent = historyStatus.state === "on"
+    ? `已纳入 ${historyStatus.count.toLocaleString()} 个网址 · 最近 14 天${historyStatus.truncated ? "，已达到 10,000 条上限" : ""}。`
+    : historyStatus.state === "error" ? `暂时无法读取历史：${historyStatus.error}。其他页面仍可搜索。`
+      : historyStatus.state === "permission-required" ? "历史权限已撤销。点击开启可重新授权。" : "开启后可搜索浏览器已有的历史记录，仅在本地使用。";
+  $("#search-count").textContent = `${query ? "找到" : "可查找"} ${total.toLocaleString()} 个页面${total ? ` · ${searchPage * SEARCH_PAGE_SIZE + 1}–${Math.min(total, (searchPage + 1) * SEARCH_PAGE_SIZE)}` : ""}`;
+  $("#search-pagination").hidden = pages <= 1;
+  $("#search-page-number").textContent = `${searchPage + 1} / ${pages}`;
+  $("#search-previous").disabled = searchPage === 0;
+  $("#search-next").disabled = searchPage >= pages - 1;
   $("#search-results").className = results.length ? "results" : "results empty-state";
-  updateHTML($("#search-results"), results.map(pageRow).join("") || "未找到匹配的本地页面记录。");
+  updateHTML($("#search-results"), results.map(pageRow).join("") || ($("#search-source").value === "history" && !historyEnabled ? "开启近两周浏览历史后，可在这里查找之前访问的页面。" : "未找到匹配的本地页面记录。"));
 }
 
 $("#page-search").addEventListener("input", () => {
+  searchPage = 0;
   searchVersion++;
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => search().catch((error) => setFeedback(error.message, true)), 120);
 });
 document.querySelectorAll(".search-filters select").forEach((select) => select.addEventListener("change", () => {
-  searchVersion++; search().catch((error) => setFeedback(error.message, true));
+  searchPage = 0; searchVersion++; search().catch((error) => setFeedback(error.message, true));
 }));
+$("#search-previous").addEventListener("click", () => { searchPage = Math.max(0, searchPage - 1); search().catch((error) => setFeedback(error.message, true)); });
+$("#search-next").addEventListener("click", () => { searchPage++; search().catch((error) => setFeedback(error.message, true)); });
+$("#toggle-history-search").addEventListener("click", async () => {
+  const enable = !historyEnabled;
+  historyBusy = true;
+  $("#toggle-history-search").disabled = true;
+  try {
+    // Request directly in the click handler to retain the browser user gesture.
+    if (enable && !await chrome.permissions.request({ permissions: ["history"] })) {
+      setFeedback("未获得历史记录权限，仍可搜索打开和保存的页面。");
+      return;
+    }
+    const result = await chrome.runtime.sendMessage({ type: "setHistorySearch", enabled: enable });
+    if (!result.ok) throw new Error(result.reason);
+    if (!enable) await chrome.permissions.remove({ permissions: ["history"] });
+    searchPage = 0;
+    await search();
+  } catch (error) { setFeedback(error.message, true); }
+  finally { historyBusy = false; $("#toggle-history-search").disabled = false; }
+});
+chrome.permissions.onRemoved.addListener((permissions) => {
+  if (!permissions.permissions?.includes("history")) return;
+  searchVersion++;
+  $("#search-results").replaceChildren();
+  searchPage = 0;
+  search().catch((error) => setFeedback(error.message, true));
+});
 
 document.body.addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-action]");

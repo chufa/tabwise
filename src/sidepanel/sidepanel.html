@@ -49,16 +49,26 @@
           </nav>
           <section id="view-find" role="tabpanel" aria-labelledby="nav-find" data-view="find">
             <label class="search-field" for="page-search"><span class="visually-hidden">查找页面</span>
-              <input id="page-search" type="search" autocomplete="off" placeholder="搜索标题、网站或之前保存的页面">
+              <input id="page-search" type="search" autocomplete="off" placeholder="搜索打开的页面、保存的页面和浏览历史">
             </label>
             <details class="saved-tools tool-disclosure"><summary>筛选搜索范围</summary><div class="search-filters">
-              <label>来源<select id="search-source"><option value="all">全部来源</option><option value="open">打开页面</option><option value="suspended">休眠记录</option><option value="workspace">工作区</option><option value="checkpoint">恢复点</option><option value="closed">最近关闭</option></select></label>
-              <label>状态<select id="search-status"><option value="all">全部状态</option><option value="open">已打开</option><option value="protected">已保护</option><option value="suspended">休眠中</option><option value="saved">已保存</option></select></label>
+              <label>来源<select id="search-source"><option value="all">全部来源</option><option value="open">打开页面</option><option value="suspended">休眠页面</option><option value="workspace">工作区</option><option value="checkpoint">恢复点</option><option value="recent">最近休眠</option><option value="closed">最近关闭</option><option value="history">近两周浏览历史</option></select></label>
+              <label>状态<select id="search-status"><option value="all">全部状态</option><option value="open">已打开</option><option value="protected">已保护</option><option value="suspended">休眠中</option><option value="saved">已保存</option><option value="visited">浏览历史</option></select></label>
               <label>窗口<select id="search-window"><option value="">全部窗口</option></select></label>
               <label>工作区<select id="search-workspace"><option value="">全部工作区</option></select></label>
             </div></details>
             <p id="search-hint" class="hint">支持中文、拼音和英文纠错。相同网址合并展示，搜索仅在本地进行。</p>
-            <div id="search-results" class="results empty-state">输入关键词，找回之前看过的页面。</div>
+            <div class="history-search-control">
+              <div><strong>近两周浏览历史</strong><p id="history-search-status" class="hint" role="status">开启后可搜索浏览器已有的历史记录，仅在本地使用。</p></div>
+              <button id="toggle-history-search" class="quiet-button" type="button">开启</button>
+            </div>
+            <div class="search-summary"><span id="search-count" role="status" aria-live="polite"></span></div>
+            <div id="search-results" class="results empty-state" aria-busy="true">正在读取页面…</div>
+            <nav id="search-pagination" class="search-pagination" aria-label="搜索结果分页" hidden>
+              <button id="search-previous" class="quiet-button" type="button">上一页</button>
+              <span id="search-page-number"></span>
+              <button id="search-next" class="quiet-button" type="button">下一页</button>
+            </nav>
           </section>
           <section id="view-workspaces" role="tabpanel" aria-labelledby="nav-workspaces" data-view="workspaces" hidden>
             <div class="section-heading"><h2>保存的工作区</h2><button id="save-workspace" class="action-button" type="button">保存当前窗口</button></div>

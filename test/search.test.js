@@ -116,6 +116,26 @@ test("sorts tabs by recency, observed duration, and measured JS heap", () => {
   assert.deepEqual(tabs.map((tab) => tab.id), [1, 2, 3]);
 });
 
+test("catalog paginates all unique URLs and merges nonmatching live titles with historic matches", () => {
+  const url = "https://catalog.test/shared";
+  const items = Array.from({ length: 135 }, (_, i) => ({ id: `history:${i}`, url: `https://catalog.test/${i}`,
+    title: `浏览器研究 ${i}`, source: "history", status: "visited", lastAccessed: i }));
+  items.push({ id: "historic", url, title: "浏览器研究", source: "history", status: "visited", lastVisited: 123, lastAccessed: 86_400_000 },
+    { id: "live", tabId: 9, windowId: 1, url, title: "New title", source: "open", status: "protected" },
+    { id: "workspace", url, title: "Saved title", source: "workspace", workspaceId: "saved" });
+  const catalog = searchPageMemory(items, "liulanqi", 30, { deduplicate: true, withTotal: true });
+  assert.equal(catalog.total, 136);
+  const shared = catalog.results.find((page) => page.url === url);
+  assert.equal(shared.id, "historic");
+  assert.equal(shared.sources.length, 3);
+  assert.equal(shared.sources.find((page) => page.source === "open").tabId, 9);
+  const second = searchPageMemory(items, "liulanqi", 30, { deduplicate: true, withTotal: true, offset: 30 });
+  assert.equal(second.results.length, 30);
+  assert.ok(second.results.every((page) => !catalog.results.some((other) => other.url === page.url)));
+  assert.equal(searchPageMemory(items, "", 30, { includeEmpty: true, withTotal: true, deduplicate: true, offset: 120 }).results.length, 16);
+  assert.equal(searchPageMemory(items, "", 30, { includeEmpty: true, source: "history", status: "visited" }).length, 30);
+});
+
 test("explains a safe suspension candidate without overriding protection", () => {
   const candidate = buildSuspendCandidate({
     id: 7,

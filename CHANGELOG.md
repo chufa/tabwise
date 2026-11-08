@@ -4,6 +4,8 @@
 
 ### Features
 
+- Unify open/suspended pages, saved workspaces/checkpoints, recent records and opt-in native browser history from the past 14 days in local search.
+- Merge all matching-URL provenance, show visit times and focus/restore existing tabs; browse blank-query results with totals and 30-row pagination.
 - Reorganize the workbench into Tasks, Pages, Resources and History with focused page tools and persistent drafts across navigation.
 - Split task editing into progress, sources and AI continuation; add local task search and preserve selected sources after saving notes.
 - Keep popup tab search and quick actions separate from organizing/saved tools, and group settings into five task-oriented categories.
@@ -26,6 +28,8 @@
 
 ### Reliability
 
+- Gate native history with an optional permission and explicit local opt-in, invalidate ephemeral caches on visits/deletions/revocation, and revalidate visits before opening old results.
+- Keep native history out of persisted extension data, dashboard/AI snapshots and untrusted webpage search responses.
 - Fix toolbar popup intrinsic sizing: remove the viewport-relative body maximum, keep the 410px width and 600px height cap, and prevent header/navigation wrapping.
 - Resolve omitted native-popup sender document IDs from the unique browser-reported POPUP context; retain document-bound previews and reject stale previews after reopening.
 - Reveal the destination before executing palette commands, discard stale search commands immediately, and locate invalid fields across hidden settings/task steps.

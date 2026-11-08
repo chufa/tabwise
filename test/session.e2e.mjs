@@ -116,7 +116,7 @@ export async function verifySession({ context, control, fixture, extensionUrl, m
     const send = chrome.runtime.sendMessage.bind(chrome.runtime);
     chrome.runtime.sendMessage = async (message) => {
       const result = await send(message);
-      if (message.type === "searchPages" && message.query === "llq") {
+      if (message.type === "searchPageCatalog" && message.query === "llq") {
         await new Promise((resolve) => { globalThis.releaseOldSearch = resolve; });
       }
       return result;
