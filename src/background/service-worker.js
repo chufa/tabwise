@@ -43,7 +43,8 @@ const modelAccess = createModelAccess({ getSettings, changeSettings });
 const contextManager = createContextManager({
   getTabs: logicalTabs, getWorkspaces, getSettings, fetchOllama,
   getModelConfig: modelAccess.config, generateModel: modelAccess.generate,
-  getWindowId: async () => (await chrome.windows.getLastFocused()).id
+  getWindowId: async () => (await chrome.windows.getLastFocused()).id,
+  resolveSearchSource: resolveSearchSourceForContext
 });
 
 const extensionOrigin = chrome.runtime.getURL("").replace(/\/$/, "");
@@ -410,10 +411,48 @@ function sanitizeSettings(current, update) {
     closedHistoryDays: Number.isFinite(Number(update.closedHistoryDays)) ? Math.min(30, Math.max(1, Math.round(Number(update.closedHistoryDays)))) : current.closedHistoryDays,
     // History opt-in is changed only by the permission-checked search command.
     browserHistorySearchEnabled: current.browserHistorySearchEnabled === true,
+    historyExcludedDomains: Array.isArray(update.historyExcludedDomains) ? normalizeList(update.historyExcludedDomains) : current.historyExcludedDomains,
     trustedDomains: Array.isArray(update.trustedDomains) ? normalizeList(update.trustedDomains) : current.trustedDomains,
     blockedDomains: Array.isArray(update.blockedDomains) ? normalizeList(update.blockedDomains) : current.blockedDomains,
     pauseUntil: Number.isFinite(pauseUntil) && pauseUntil > Date.now() ? pauseUntil : 0
   };
+}
+
+const SEARCH_PRESETS_KEY = "searchPresets";
+function normalizeSearchPreset(value) {
+  if (!value || typeof value !== "object") throw new Error("搜索筛选无效。");
+  const text = (item, limit) => typeof item === "string" ? item.trim().slice(0, limit) : "";
+  const source = ["all", "open", "suspended", "workspace", "checkpoint", "recent", "closed", "history"].includes(value.source) ? value.source : "all";
+  const status = ["all", "open", "protected", "suspended", "saved", "visited"].includes(value.status) ? value.status : "all";
+  const periodDays = [0, 1, 3, 7, 14].includes(Number(value.periodDays)) ? Number(value.periodDays) : 0;
+  const sort = ["relevance", "recent", "frequent"].includes(value.sort) ? value.sort : "relevance";
+  const domain = normalizeDomain(value.domain);
+  const name = text(value.name, 40);
+  if (!name) throw new Error("请填写筛选名称。");
+  return { id: typeof value.id === "string" && /^[a-z0-9-]{1,80}$/i.test(value.id) ? value.id : crypto.randomUUID(),
+    name, source, status, periodDays, sort, domain, workspaceId: text(value.workspaceId, 120), windowId: text(value.windowId, 30) };
+}
+async function getSearchPresets() {
+  const { [SEARCH_PRESETS_KEY]: presets = [] } = await chrome.storage.local.get(SEARCH_PRESETS_KEY);
+  return Array.isArray(presets) ? presets.flatMap((item) => {
+    try { return [normalizeSearchPreset(item)]; } catch { return []; }
+  }).slice(0, 12) : [];
+}
+async function saveSearchPreset(value) {
+  return queueStorage("local", async () => {
+    const preset = normalizeSearchPreset(value);
+    const presets = await getSearchPresets();
+    const next = [preset, ...presets.filter((item) => item.id !== preset.id && item.name !== preset.name)].slice(0, 12);
+    await chrome.storage.local.set({ [SEARCH_PRESETS_KEY]: next });
+    return { ok: true, presets: next };
+  });
+}
+async function removeSearchPreset(id) {
+  return queueStorage("local", async () => {
+    const presets = (await getSearchPresets()).filter((item) => item.id !== id);
+    await chrome.storage.local.set({ [SEARCH_PRESETS_KEY]: presets });
+    return { ok: true, presets };
+  });
 }
 
 async function getProtectionStates() {
@@ -864,7 +903,8 @@ function buildPageMemory(dashboard, workspaces, checkpoints, recent, closed = []
     active: tab.active,
     recordId: tab.recordId,
     lastAccessed: tab.lastAccessed,
-    windowId: tab.windowId
+    windowId: tab.windowId,
+    pinned: Boolean(tab.pinned)
   }));
   for (const workspace of workspaces) {
     workspace.tabs.forEach((tab, index) => pages.push({
@@ -911,6 +951,7 @@ function buildPageMemory(dashboard, workspaces, checkpoints, recent, closed = []
 }
 
 async function searchPages(query, limit, options = {}, allowHistory = true) {
+  const startedAt = performance.now();
   const settings = await getSettings();
   if (indexedVersion !== searchVersion || Date.now() - indexedAt >= 60_000) {
     if (!indexBuild) indexBuild = (async () => {
@@ -930,12 +971,12 @@ async function searchPages(query, limit, options = {}, allowHistory = true) {
   if (allowHistory) historyIndex.replace(history.pages);
   const result = searchPageMemory([...pageIndex.pages(), ...(allowHistory ? historyIndex.pages() : [])], query, limit,
     { ...options, semantic: settings.semanticSearch, deduplicate: options.deduplicate === true });
-  return options.withTotal ? { ok: true, ...result, historyStatus: history.status } : result;
+  return options.withTotal ? { ok: true, ...result, historyStatus: history.status, elapsedMs: Math.round(performance.now() - startedAt) } : result;
 }
 
 async function openSearchResult(result) {
   if (!result || typeof result !== "object") return { ok: false, reason: "搜索结果无效" };
-  if (result.source === "history") return openSavedPage(await browserHistory.resolve(result));
+  if (result.source === "history") return openSavedPage(await browserHistory.resolve(result), { background: result.background === true });
   if (result.source === "open") {
     const tab = await chrome.tabs.get(result.tabId);
     if (result.url && tab.url !== result.url) throw new Error("标签页已导航到其他页面，请重新搜索。");
@@ -950,7 +991,7 @@ async function openSearchResult(result) {
   if (result.source === "closed" && result.closedId) {
     const page = (await getClosedPages()).find((item) => item.id === result.closedId);
     if (!page || page.url !== result.url) throw new Error("关闭记录已过期，请刷新列表。");
-    const opened = await openSavedPage(page);
+    const opened = await openSavedPage(page, { background: result.background === true });
     if (opened.ok) await removeClosedPage(page.id);
     return opened;
   }
@@ -959,7 +1000,7 @@ async function openSearchResult(result) {
     const workspace = (await getWorkspaces()).find((item) => item.id === result.workspaceId);
     if (!workspace) return { ok: false, reason: "工作区不存在" };
     const page = resolveSavedResult(result, workspace);
-    const opened = await openSavedPage(page);
+    const opened = await openSavedPage(page, { background: result.background === true });
     if (opened.ok) await runOperation(async () => {
       if ((await getWorkspaces()).some((item) => item.id === workspace.id)) await updateWorkspace(workspace.id, { lastOpenedAt: Date.now() });
     });
@@ -968,24 +1009,81 @@ async function openSearchResult(result) {
   if (result.source === "checkpoint" && result.checkpointId) {
     const checkpoint = (await getRecoveryCheckpoints()).find((item) => item.id === result.checkpointId);
     if (!checkpoint) throw new Error("恢复点不存在");
-    return openSavedPage(resolveSavedResult(result, checkpoint));
+    return openSavedPage(resolveSavedResult(result, checkpoint), { background: result.background === true });
   }
   return { ok: false, reason: "暂不支持打开该搜索结果" };
 }
 
-async function openSavedPage(page) {
+async function openSavedPage(page, options = {}) {
   const existing = (await logicalTabs()).find((tab) => !tab.incognito && tab.logicalUrl === page.url);
   if (existing) {
     if (existing.recordId) {
       const result = await restoreRecord(existing.recordId);
       if (!result.ok) return result;
     } else if (existing.discarded) await chrome.tabs.reload(existing.id);
-    await focusTab(existing.id);
+    if (!options.background) await focusTab(existing.id);
     return { ok: true, count: 0, focused: true };
   }
   if (!isSuspendableUrl(page.url)) throw new Error("保存的地址不受支持。");
-  await chrome.tabs.create({ url: page.url, active: true });
+  await chrome.tabs.create({ url: page.url, active: !options.background });
   return { ok: true, count: 1 };
+}
+
+async function resolveSearchSourceForContext(result) {
+  if (!result || typeof result !== "object" || typeof result.url !== "string") throw new Error("搜索结果已失效，请重新搜索。");
+  const live = result.sources?.find((source) => source.source === "open");
+  if (live?.tabId) {
+    const tab = await chrome.tabs.get(live.tabId);
+    if (!tab.incognito && tab.url === result.url) return { title: tab.title || result.title, url: tab.url };
+  }
+  if (result.source === "history") {
+    const page = await browserHistory.resolve(result);
+    return { title: page.title, url: page.url };
+  }
+  if (result.source === "open") {
+    const tab = await chrome.tabs.get(result.tabId);
+    const url = tab.url;
+    if (tab.incognito || url !== result.url) throw new Error("页面已变化，请重新搜索。");
+    return { title: tab.title || result.title, url };
+  }
+  if (result.source === "suspended" && result.recordId) {
+    const record = await getRecord(result.recordId);
+    if (!record || record.originalUrl !== result.url) throw new Error("休眠页面已变化，请重新搜索。");
+    return { title: record.title || result.title, url: record.originalUrl };
+  }
+  if (result.source === "workspace" && result.workspaceId) {
+    const workspace = (await getWorkspaces()).find((item) => item.id === result.workspaceId);
+    const page = workspace && resolveSavedResult(result, workspace);
+    if (!page || page.url !== result.url) throw new Error("工作区资料已变化，请重新搜索。");
+    return { title: page.title || result.title, url: page.url };
+  }
+  if (result.source === "checkpoint" && result.checkpointId) {
+    const checkpoint = (await getRecoveryCheckpoints()).find((item) => item.id === result.checkpointId);
+    const page = checkpoint && resolveSavedResult(result, checkpoint);
+    if (!page || page.url !== result.url) throw new Error("恢复点资料已变化，请重新搜索。");
+    return { title: page.title || result.title, url: page.url };
+  }
+  if (result.source === "closed" && result.closedId) {
+    const page = (await getClosedPages()).find((item) => item.id === result.closedId && item.url === result.url);
+    if (!page) throw new Error("关闭记录已过期，请重新搜索。");
+    return { title: page.title || result.title, url: page.url };
+  }
+  if (result.source === "recent" && result.recordId) {
+    const record = (await getRecentSuspensions()).find((item) => item.recordId === result.recordId && item.originalUrl === result.url);
+    if (!record) throw new Error("最近休眠记录已过期，请重新搜索。");
+    return { title: record.title || result.title, url: record.originalUrl };
+  }
+  throw new Error("该搜索结果不能加入任务。");
+}
+
+async function pinSearchResult(result) {
+  const live = result?.source === "open" ? result : result?.sources?.find((source) => source.source === "open");
+  if (!live?.tabId) throw new Error("只有当前打开的页面可以固定。");
+  const tab = await chrome.tabs.get(live.tabId);
+  if (tab.incognito || tab.url !== result.url) throw new Error("页面已变化，请重新搜索。");
+  const updated = await chrome.tabs.update(tab.id, { pinned: !tab.pinned });
+  stateChanged();
+  return { ok: true, pinned: updated.pinned };
 }
 
 async function fetchOllama(endpoint, path, init = {}, timeoutMs = 30_000, signal) {
@@ -1303,13 +1401,19 @@ function handleMessage(message, sender, sendResponse) {
     return true;
   }
   const searchUi = ["src/sidepanel/sidepanel.html", "src/popup/popup.html", "src/options/options.html"].some((path) => isExtensionPage(sender, path));
-  if ((["searchPageCatalog", "setHistorySearch"].includes(message.type) || message.type === "openSearchResult" && message.result?.source === "history") && !searchUi) {
+  const sidepanelSearchUi = isExtensionPage(sender, "src/sidepanel/sidepanel.html");
+  if ((["searchPageCatalog", "setHistorySearch", "pinSearchResult"].includes(message.type) || message.type === "openSearchResult" && message.result?.source === "history") && !searchUi) {
+    sendResponse({ ok: false, reason: "请从 TabWise 查询页面操作。" });
+    return false;
+  }
+  if (["getSearchPresets", "saveSearchPreset", "removeSearchPreset", "clearHistorySearchCache"].includes(message.type) && !sidepanelSearchUi) {
     sendResponse({ ok: false, reason: "请从 TabWise 查询页面操作。" });
     return false;
   }
   const searchFilters = message.filters || message;
   const filters = { source: searchFilters.source, status: searchFilters.status, workspaceId: searchFilters.workspaceId,
-    windowId: searchFilters.windowId, deduplicate: searchFilters.deduplicate === true };
+    windowId: searchFilters.windowId, domain: searchFilters.domain, periodDays: searchFilters.periodDays,
+    sort: searchFilters.sort, deduplicate: searchFilters.deduplicate === true };
   const tasks = {
     getDashboard,
     getHealth,
@@ -1342,7 +1446,12 @@ function handleMessage(message, sender, sendResponse) {
     searchPages: () => searchPages(message.query, message.limit, filters, searchUi),
     searchPageCatalog: () => searchPages(message.query, message.limit, { ...filters, deduplicate: true, includeEmpty: true, withTotal: true, offset: message.offset }, searchUi),
     setHistorySearch: () => browserHistory.setEnabled(message.enabled === true),
+    clearHistorySearchCache: async () => { browserHistory.invalidate(); return { ok: true }; },
+    getSearchPresets: async () => ({ ok: true, presets: await getSearchPresets() }),
+    saveSearchPreset: () => saveSearchPreset(message.preset),
+    removeSearchPreset: () => removeSearchPreset(message.id),
     openSearchResult: () => openSearchResult(message.result),
+    pinSearchResult: () => pinSearchResult(message.result),
     getSuspendedRecord: () => getSuspendedRecordForSender(message.recordId, sender),
     suspendTab: () => suspendTab(message.tabId),
     directSuspendTab: () => suspendTab(message.tabId, "direct", true),

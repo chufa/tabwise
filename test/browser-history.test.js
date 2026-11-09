@@ -21,6 +21,7 @@ function fixture() {
   const history = createBrowserHistory({ browser, getSettings: async () => settings,
     changeSettings: async (update) => { settings = update(settings); }, now: () => time });
   return { browser, history, get time() { return time; }, set time(value) { time = value; },
+    get settings() { return settings; }, set settings(value) { settings = value; },
     get calls() { return calls; }, get request() { return request; }, set granted(value) { granted = value; },
     set items(value) { items = value; }, set visits(value) { visits = value; } };
 }
@@ -93,4 +94,20 @@ test("revocation discards in-flight native reads, and API errors preserve other 
   assert.equal((await f.history.snapshot()).pages.length, 1);
   const restarted = createBrowserHistory({ browser: f.browser, getSettings: async () => ({ browserHistorySearchEnabled: true }), now: () => f.time });
   assert.equal((await restarted.snapshot()).pages.length, 1);
+});
+
+test("domain exclusions stay local to the search snapshot and report their count", async () => {
+  const f = fixture();
+  f.granted = true;
+  f.items = [
+    { id: "keep", url: "https://docs.test/keep", lastVisitTime: f.time },
+    { id: "exclude", url: "https://secret.docs.test/private", lastVisitTime: f.time, visitCount: 9 }
+  ];
+  await f.history.setEnabled(true);
+  f.settings = { browserHistorySearchEnabled: true, historyExcludedDomains: ["docs.test"] };
+  // Recreate with a fixed settings reader to model a saved privacy policy.
+  const filtered = createBrowserHistory({ browser: f.browser, getSettings: async () => f.settings, now: () => f.time });
+  const snapshot = await filtered.snapshot();
+  assert.deepEqual(snapshot.pages, []);
+  assert.equal(snapshot.status.excludedCount, 2);
 });

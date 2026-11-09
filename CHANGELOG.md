@@ -4,6 +4,10 @@
 
 ### Features
 
+- Add time, exact-domain and relevance/recent/frequency search controls, saved local search presets, keyboard navigation, page pinning, and background opening.
+- Let users add an explicitly selected, revalidated search result to an active task; suggest related already-open pages from task-source domains.
+- Show a reviewable local handoff checklist after a user archives a task, without automatically changing any pages or workspaces.
+- Add per-domain browser-history exclusions and explicit in-memory cache clearing without touching native history.
 - Unify open/suspended pages, saved workspaces/checkpoints, recent records and opt-in native browser history from the past 14 days in local search.
 - Merge all matching-URL provenance, show visit times and focus/restore existing tabs; browse blank-query results with totals and 30-row pagination.
 - Reorganize the workbench into Tasks, Pages, Resources and History with focused page tools and persistent drafts across navigation.
@@ -28,6 +32,7 @@
 
 ### Reliability
 
+- Keep search filters and history exclusions local, validate result provenance before task attachment, and report elapsed search time without persisting telemetry.
 - Gate native history with an optional permission and explicit local opt-in, invalidate ephemeral caches on visits/deletions/revocation, and revalidate visits before opening old results.
 - Keep native history out of persisted extension data, dashboard/AI snapshots and untrusted webpage search responses.
 - Fix toolbar popup intrinsic sizing: remove the viewport-relative body maximum, keep the 410px width and 600px height cap, and prevent header/navigation wrapping.

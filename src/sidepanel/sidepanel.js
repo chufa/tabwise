@@ -21,6 +21,10 @@ let searchPage = 0;
 let historyEnabled = false;
 let historyBusy = false;
 const SEARCH_PAGE_SIZE = 30;
+let searchPresets = [];
+let contextTasks = [];
+let searchResults = [];
+let selectedResultIndex = -1;
 let dashboard;
 let aiPrepared;
 let aiVersion = 0;
@@ -123,7 +127,7 @@ function pageRow(page) {
     protected: "已保护",
     visited: "浏览历史"
   }[live?.status || page.status] || page.source;
-  return `<article class="result">
+  return `<article class="result" data-search-result data-result-index="${searchResults.indexOf(page)}" tabindex="-1">
     <div class="result-copy">
       <strong title="${escapeHtml(page.title)}">${highlightMatch(page.title, $("#page-search").value)}</strong>
       <span title="${escapeHtml(page.url)}">${highlightMatch(page.url, $("#page-search").value)}</span>
@@ -131,8 +135,49 @@ function pageRow(page) {
       ${lastVisited ? `<span title="${escapeHtml(new Date(lastVisited).toLocaleString())}">上次访问：${escapeHtml(relativeTime(lastVisited))}</span>` : ""}
     </div>
     <span class="badge">${escapeHtml(state)}</span>
-    <button class="action-button" data-action="open-result" data-result="${escapeHtml(JSON.stringify(page))}" type="button">${live?.source === "open" ? "切换" : live?.source === "suspended" ? "恢复" : "打开"}</button>
+    <div class="result-actions">
+      <button class="action-button" data-action="open-result" data-result="${escapeHtml(JSON.stringify(page))}" type="button">${live?.source === "open" ? "切换" : live?.source === "suspended" ? "恢复" : "打开"}</button>
+      ${live ? `<button class="quiet-button" data-action="pin-result" data-result="${escapeHtml(JSON.stringify(page))}" type="button">${live.pinned ? "取消固定" : "固定"}</button>` : ""}
+      <button class="quiet-button" data-action="add-result-task" data-result="${escapeHtml(JSON.stringify(page))}" type="button">加入任务</button>
+    </div>
   </article>`;
+}
+
+function renderSearchPresets(presets = searchPresets) {
+  searchPresets = presets;
+  const selected = $("#search-preset").value;
+  updateHTML($("#search-preset"), `<option value="">选择常用筛选</option>${presets.map((preset) =>
+    `<option value="${escapeHtml(preset.id)}">${escapeHtml(preset.name)}</option>`).join("")}`);
+  if (presets.some((preset) => preset.id === selected)) $("#search-preset").value = selected;
+  $("#remove-search-preset").disabled = !$("#search-preset").value;
+}
+
+function renderSearchContextTasks(tasks) {
+  contextTasks = tasks.filter((task) => task.status === "active");
+  const select = $("#search-context-task"), value = select.value;
+  updateHTML(select, `<option value="">不加入任务</option>${contextTasks.map((task) =>
+    `<option value="${escapeHtml(task.id)}">${escapeHtml(task.name)}</option>`).join("")}`);
+  if (contextTasks.some((task) => task.id === value)) select.value = value;
+}
+
+function searchFilterValues() {
+  return {
+    source: $("#search-source").value, status: $("#search-status").value, windowId: $("#search-window").value,
+    workspaceId: $("#search-workspace").value, periodDays: Number($("#search-period").value),
+    sort: $("#search-sort").value, domain: $("#search-domain").value.trim()
+  };
+}
+
+function focusSearchResult(index) {
+  const rows = [...document.querySelectorAll("[data-search-result]")];
+  if (!rows.length) return;
+  selectedResultIndex = Math.max(0, Math.min(rows.length - 1, index));
+  rows.forEach((row, rowIndex) => {
+    const selected = rowIndex === selectedResultIndex;
+    row.classList.toggle("is-selected", selected);
+    row.tabIndex = selected ? 0 : -1;
+  });
+  rows[selectedResultIndex].focus({ preventScroll: true });
 }
 
 function candidateRow(candidate) {
@@ -205,11 +250,12 @@ function renderDiagnostics(result) {
 }
 
 async function refreshDashboard() {
-  const [data, workspaces, trash, recent, checkpoints, reviews, operations, closed, health] = await Promise.all([
+  const [data, workspaces, trash, recent, checkpoints, reviews, operations, closed, health, contextTaskResult, searchPresetResult] = await Promise.all([
     chrome.runtime.sendMessage({ type: "getDashboard" }), chrome.runtime.sendMessage({ type: "getWorkspaces" }),
     chrome.runtime.sendMessage({ type: "getWorkspaceTrash" }), chrome.runtime.sendMessage({ type: "getRecentSuspensions" }),
     chrome.runtime.sendMessage({ type: "getRecoveryCheckpoints" }), chrome.runtime.sendMessage({ type: "getResourceReviews" }),
-    chrome.runtime.sendMessage({ type: "getOperations" }), chrome.runtime.sendMessage({ type: "getClosedPages" }), chrome.runtime.sendMessage({ type: "getHealth" })
+    chrome.runtime.sendMessage({ type: "getOperations" }), chrome.runtime.sendMessage({ type: "getClosedPages" }), chrome.runtime.sendMessage({ type: "getHealth" }),
+    chrome.runtime.sendMessage({ type: "listContextTasks" }), chrome.runtime.sendMessage({ type: "getSearchPresets" })
   ]);
   dashboard = data;
   budgetUI.update(data.budget);
@@ -217,6 +263,9 @@ async function refreshDashboard() {
   workspaceUI.setData(aiWorkspaces, trash, await chrome.runtime.sendMessage({ type: "getWorkspaceBindings" }));
   sessionUI.setData(checkpoints, closed, data.settings);
   await Promise.all([taskUI.update(), restoreUI.update(), contextUI.update()]);
+  renderSearchContextTasks(contextTaskResult.tasks || []);
+  renderSearchPresets(searchPresetResult.presets || []);
+  $("#history-excluded-domains").value = (data.settings.historyExcludedDomains || []).join("\n");
   for (const [selector, html] of [
     ["#search-window", [...new Set(data.tabs.map((tab) => tab.windowId))].map((id) => `<option value="${id}">窗口 ${id}</option>`).join("")],
     ["#search-workspace", workspaces.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join("")]
@@ -284,24 +333,28 @@ async function refreshDashboard() {
 
 async function search() {
   const version = ++searchVersion;
+  const startedAt = performance.now();
   const query = $("#page-search").value.trim();
   $("#search-results").setAttribute("aria-busy", "true");
   const catalog = await chrome.runtime.sendMessage({ type: "searchPageCatalog", query, limit: SEARCH_PAGE_SIZE, offset: searchPage * SEARCH_PAGE_SIZE,
-    source: $("#search-source").value, status: $("#search-status").value, windowId: $("#search-window").value, workspaceId: $("#search-workspace").value });
+    ...searchFilterValues() });
   if (version !== searchVersion) return;
   $("#search-results").setAttribute("aria-busy", "false");
   if (!catalog.ok) throw new Error(catalog.reason || "搜索暂时不可用");
   const { results, total, historyStatus } = catalog;
+  searchResults = results;
+  selectedResultIndex = -1;
   const pages = Math.max(1, Math.ceil(total / SEARCH_PAGE_SIZE));
   if (searchPage >= pages) { searchPage = pages - 1; return search(); }
   historyEnabled = !["off", "permission-required"].includes(historyStatus.state);
   $("#toggle-history-search").textContent = historyEnabled ? "关闭" : "开启";
   $("#toggle-history-search").disabled = historyBusy;
   $("#history-search-status").textContent = historyStatus.state === "on"
-    ? `已纳入 ${historyStatus.count.toLocaleString()} 个网址 · 最近 14 天${historyStatus.truncated ? "，已达到 10,000 条上限" : ""}。`
+    ? `已纳入 ${historyStatus.count.toLocaleString()} 个网址 · 最近 14 天${historyStatus.excludedCount ? ` · 已排除 ${historyStatus.excludedCount} 个网址` : ""}${historyStatus.truncated ? "，已达到 10,000 条上限" : ""}。`
     : historyStatus.state === "error" ? `暂时无法读取历史：${historyStatus.error}。其他页面仍可搜索。`
       : historyStatus.state === "permission-required" ? "历史权限已撤销。点击开启可重新授权。" : "开启后可搜索浏览器已有的历史记录，仅在本地使用。";
-  $("#search-count").textContent = `${query ? "找到" : "可查找"} ${total.toLocaleString()} 个页面${total ? ` · ${searchPage * SEARCH_PAGE_SIZE + 1}–${Math.min(total, (searchPage + 1) * SEARCH_PAGE_SIZE)}` : ""}`;
+  const elapsed = Number(catalog.elapsedMs || performance.now() - startedAt);
+  $("#search-count").textContent = `${query ? "找到" : "可查找"} ${total.toLocaleString()} 个页面${total ? ` · ${searchPage * SEARCH_PAGE_SIZE + 1}–${Math.min(total, (searchPage + 1) * SEARCH_PAGE_SIZE)}` : ""} · ${elapsed} ms`;
   $("#search-pagination").hidden = pages <= 1;
   $("#search-page-number").textContent = `${searchPage + 1} / ${pages}`;
   $("#search-previous").disabled = searchPage === 0;
@@ -319,8 +372,40 @@ $("#page-search").addEventListener("input", () => {
 document.querySelectorAll(".search-filters select").forEach((select) => select.addEventListener("change", () => {
   searchPage = 0; searchVersion++; search().catch((error) => setFeedback(error.message, true));
 }));
+$("#search-domain").addEventListener("input", () => {
+  searchPage = 0; clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => search().catch((error) => setFeedback(error.message, true)), 120);
+});
 $("#search-previous").addEventListener("click", () => { searchPage = Math.max(0, searchPage - 1); search().catch((error) => setFeedback(error.message, true)); });
 $("#search-next").addEventListener("click", () => { searchPage++; search().catch((error) => setFeedback(error.message, true)); });
+$("#search-preset").addEventListener("change", () => {
+  const preset = searchPresets.find((item) => item.id === $("#search-preset").value);
+  $("#remove-search-preset").disabled = !preset;
+  if (!preset) return;
+  $("#search-source").value = preset.source; $("#search-status").value = preset.status;
+  $("#search-period").value = String(preset.periodDays); $("#search-sort").value = preset.sort;
+  $("#search-domain").value = preset.domain; $("#search-workspace").value = preset.workspaceId;
+  $("#search-window").value = preset.windowId; searchPage = 0;
+  search().catch((error) => setFeedback(error.message, true));
+});
+$("#save-search-preset").addEventListener("click", async () => {
+  const name = window.prompt("筛选名称");
+  if (!name?.trim()) return;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "saveSearchPreset", preset: { name, ...searchFilterValues() } });
+    if (!result.ok) throw new Error(result.reason);
+    renderSearchPresets(result.presets); setFeedback("已保存常用筛选。");
+  } catch (error) { setFeedback(error.message, true); }
+});
+$("#remove-search-preset").addEventListener("click", async () => {
+  const id = $("#search-preset").value;
+  if (!id) return;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "removeSearchPreset", id });
+    if (!result.ok) throw new Error(result.reason);
+    renderSearchPresets(result.presets); setFeedback("已删除常用筛选。");
+  } catch (error) { setFeedback(error.message, true); }
+});
 $("#toggle-history-search").addEventListener("click", async () => {
   const enable = !historyEnabled;
   historyBusy = true;
@@ -339,6 +424,21 @@ $("#toggle-history-search").addEventListener("click", async () => {
   } catch (error) { setFeedback(error.message, true); }
   finally { historyBusy = false; $("#toggle-history-search").disabled = false; }
 });
+$("#save-history-policy").addEventListener("click", async () => {
+  const domains = $("#history-excluded-domains").value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+  try {
+    const settings = await chrome.runtime.sendMessage({ type: "updateSettings", settings: { historyExcludedDomains: domains } });
+    $("#history-excluded-domains").value = (settings.historyExcludedDomains || []).join("\n");
+    searchPage = 0; await search(); setFeedback("历史排除域名已保存。");
+  } catch (error) { setFeedback(error.message, true); }
+});
+$("#clear-history-cache").addEventListener("click", async () => {
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "clearHistorySearchCache" });
+    if (!result.ok) throw new Error(result.reason);
+    await search(); setFeedback("历史搜索内存缓存已清空。");
+  } catch (error) { setFeedback(error.message, true); }
+});
 chrome.permissions.onRemoved.addListener((permissions) => {
   if (!permissions.permissions?.includes("history")) return;
   searchVersion++;
@@ -352,8 +452,16 @@ document.body.addEventListener("click", async (event) => {
   if (!button) return;
   button.disabled = true;
   try {
-    let result;
+    let result, feedbackMessage;
     if (button.dataset.action === "open-result") result = await chrome.runtime.sendMessage({ type: "openSearchResult", result: JSON.parse(button.dataset.result) });
+    if (button.dataset.action === "pin-result") result = await chrome.runtime.sendMessage({ type: "pinSearchResult", result: JSON.parse(button.dataset.result) });
+    if (button.dataset.action === "add-result-task") {
+      const task = contextTasks.find((item) => item.id === $("#search-context-task").value);
+      if (!task) throw new Error("请先在筛选范围中选择要加入的任务。");
+      result = await chrome.runtime.sendMessage({ type: "attachSearchContextSource", taskId: task.id, revision: task.revision,
+        result: JSON.parse(button.dataset.result), confirm: true });
+      if (result.ok) feedbackMessage = result.duplicate ? "该页面已在任务资料中。" : `已加入任务“${task.name}”。`;
+    }
     if (button.dataset.action === "focus-candidate") result = await chrome.runtime.sendMessage({ type: "focusTab", tabId: Number(button.dataset.tabId) });
     if (button.dataset.action === "suspend") result = await chrome.runtime.sendMessage({ type: "directSuspendTab", tabId: Number(button.dataset.tabId) });
     if (["protect-hour", "protect-session"].includes(button.dataset.action)) result = await chrome.runtime.sendMessage({ type: "protectTab", tabId: Number(button.dataset.tabId), duration: button.dataset.action === "protect-hour" ? "hour" : "session" });
@@ -363,7 +471,7 @@ document.body.addEventListener("click", async (event) => {
       return;
     }
     if (button.dataset.action === "retry-review") result = await chrome.runtime.sendMessage({ type: "retryResourceReview", reviewId: button.dataset.id });
-    setFeedback(result?.ok ? "操作已完成" : result?.reason || "操作未完成", !result?.ok);
+    setFeedback(feedbackMessage || (result?.ok ? "操作已完成" : result?.reason || "操作未完成"), !result?.ok);
     await loadDashboard();
   } catch (error) {
     setFeedback(error.message || "操作未完成", true);
@@ -385,6 +493,16 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey
     && !event.target.closest("input, textarea, select, [contenteditable], dialog")) {
     event.preventDefault(); revealElement($("#page-search"), { focus: true });
+  }
+  if (event.target === $("#page-search") || event.target.closest("[data-search-result]")) {
+    if (event.key === "ArrowDown") { event.preventDefault(); focusSearchResult(selectedResultIndex + 1); }
+    if (event.key === "ArrowUp") { event.preventDefault(); focusSearchResult(selectedResultIndex - 1); }
+    if (event.key === "Enter" && selectedResultIndex >= 0 && searchResults[selectedResultIndex]) {
+      event.preventDefault();
+      chrome.runtime.sendMessage({ type: "openSearchResult", result: { ...searchResults[selectedResultIndex], background: event.metaKey || event.ctrlKey } })
+        .then((result) => setFeedback(result?.ok ? (event.metaKey || event.ctrlKey ? "已在后台打开。" : "操作已完成") : result?.reason || "操作未完成", !result?.ok))
+        .catch((error) => setFeedback(error.message, true));
+    }
   }
 });
 $("#save-workspace-form").addEventListener("submit", async (event) => {

@@ -21,6 +21,13 @@ const accepted = (task) => {
     <p>${e(brief.summary)}</p>${[["hypotheses", "待验证判断"], ["questions", "待验证问题"], ["nextSteps", "建议下一步"]].map(([key, label]) =>
       `<h3>${label}</h3>${brief[key].length ? `<ul>${brief[key].map((item) => `<li>${e(item.text)}<div class="context-citations">${reference(task, item.sourceIds)}</div></li>`).join("")}</ul>` : "<p>暂无建议。</p>"}`).join("")}</div>`;
 };
+const handoffReview = (task) => task.status !== "archived" ? "" : `<details class="context-completion" open>
+  <summary>任务交接清单</summary>
+  <p>本地根据当前任务记录生成，可在重新开始任务前核对。</p>
+  <dl><dt>目标</dt><dd>${e(task.goal)}</dd><dt>完成进度</dt><dd>${e(task.progress || "尚未记录")}</dd>
+  <dt>下一步</dt><dd>${task.nextSteps.length ? e(task.nextSteps.join("\n")) : "暂无记录"}</dd>
+  <dt>资料</dt><dd>${task.sources.length ? task.sources.map((source, index) => `${index + 1}. ${source.title}`).map(e).join("\n") : "暂无资料"}</dd></dl>
+</details>`;
 function download(name, content, type, suffix) {
   const blobUrl = URL.createObjectURL(new Blob([content], { type }));
   const link = document.createElement("a");
@@ -114,6 +121,7 @@ export function createContextUI(host, { restoreUI, createLocalModel }) {
         <label>手动提供的片段<textarea data-source-excerpt maxlength="2000" rows="3">${e(source.excerpt)}</textarea></label>
         <label><input type="checkbox" data-source-remove>保存时移除此资料</label></details></div>`).join("") || '<p class="saved-hint">暂无资料，也可以只根据已记录的进度生成续接草稿。</p>'}</div>
         <div class="saved-actions"><button type="button" data-context="sources">选择资料加入任务</button>
+        <button type="button" data-context="related-sources" ${task.sources.length ? "" : "disabled"}>推荐相关打开页面</button>
         <button type="button" data-context="restore" ${task.sources.length ? "" : "disabled"}>选择资料继续</button></div><div class="context-picker" hidden></div></div>` : ""}
       <div class="context-savebar"><button class="primary-button" type="submit">${task ? "保存进度" : "创建任务"}</button>
         ${task ? '<button type="button" data-context="reload">重新读取</button><span>编辑后保存到本机</span>' : '<button type="button" data-context="close">取消创建</button>'}</div>
@@ -125,7 +133,7 @@ export function createContextUI(host, { restoreUI, createLocalModel }) {
         <div class="saved-actions"><button class="primary-button" type="button" data-context="preview">预览续接输入</button></div>
         <div class="context-preview"></div>
         <div class="saved-actions"><button class="primary-button" type="button" data-context="generate" disabled>生成续接草稿</button><button type="button" data-context="stop" hidden>停止生成</button></div>
-        <div class="context-draft"></div>${accepted(task)}</div>
+        <div class="context-draft"></div>${accepted(task)}${handoffReview(task)}</div>
         <details class="context-handoff"><summary>导出与交接</summary><p class="saved-hint">复制或下载包含原始网址的上下文包，交给 AI 对话或 IDE。任务仅保存在本机。</p>
         <div class="saved-actions"><button type="button" data-context="copy">复制 Markdown</button><button type="button" data-context="markdown">下载 Markdown</button>
         <button type="button" data-context="json">导出任务 JSON</button><button type="button" data-context="archive">${task.status === "archived" ? "取消归档" : "归档任务"}</button></div>
@@ -202,15 +210,17 @@ export function createContextUI(host, { restoreUI, createLocalModel }) {
       }
     }
   };
-  const openPicker = async () => {
+  const openPicker = async (initialKind = "current") => {
     clean(); const hostPicker = editor.querySelector(".context-picker");
     sourceSelection?.destroy(); sourceSelection = null;
     hostPicker.hidden = false;
-    hostPicker.innerHTML = `<h3>选择资料</h3><label>资料范围<select data-source-kind><option value="current">当前窗口</option><option value="workspace">已保存工作区</option></select></label>
+    hostPicker.innerHTML = `<h3>选择资料</h3><label>资料范围<select data-source-kind><option value="current">当前窗口</option><option value="related">与任务资料相关的打开页面</option><option value="workspace">已保存工作区</option></select></label>
       <label data-source-workspace-label hidden>工作区<select data-source-workspace>${workspaces.map((item) => `<option value="${e(item.id)}">${e(item.name)}</option>`).join("")}</select></label>
       <div class="saved-actions"><button type="button" data-context="source-preview">读取资料列表</button><button type="button" data-context="source-close">取消</button></div>
       <p class="saved-hint">仅列出所选范围的标题和网址，不打开页面。勾选资料后明确加入此任务。</p>
       <div class="context-source-picker"></div><div class="saved-actions"><button type="button" data-context="attach" disabled>将选定资料加入任务</button></div>`;
+    hostPicker.querySelector("[data-source-kind]").value = initialKind;
+    hostPicker.querySelector("[data-source-workspace-label]").hidden = initialKind !== "workspace";
     picker = null;
   };
   editor.addEventListener("submit", async (event) => {
@@ -290,10 +300,13 @@ export function createContextUI(host, { restoreUI, createLocalModel }) {
         writing = true; unlock = lockEditor(); notice("正在保存任务…");
       }
       if (action === "sources") { revealElement(editor.querySelector("#context-view-sources")); return await openPicker(); }
+      if (action === "related-sources") { revealElement(editor.querySelector("#context-view-sources")); return await openPicker("related"); }
       if (action === "source-close") { editor.querySelector(".context-picker").hidden = true; picker = null; return; }
       if (action === "source-preview") {
         const current = version;
-        const result = await send("prepareContextSources", { kind: editor.querySelector("[data-source-kind]").value, workspaceId: editor.querySelector("[data-source-workspace]").value });
+        const kind = editor.querySelector("[data-source-kind]").value;
+        const result = await send("prepareContextSources", { kind, taskId: kind === "related" ? task.id : undefined,
+          workspaceId: editor.querySelector("[data-source-workspace]").value });
         if (current !== version) return;
         picker = result;
         sourceSelection?.destroy();

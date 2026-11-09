@@ -33,6 +33,11 @@
 .context-accepted { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--saved-line); }
 .context-accepted ul { padding-left: 18px; }
 .context-accepted li { margin: 8px 0; }
+.context-completion { margin-top: 18px; padding: 12px; background: var(--saved-panel); }
+.context-completion summary { cursor: pointer; font-weight: 700; }
+.context-completion p { margin: 8px 0; color: var(--saved-muted); }
+.context-completion dt { margin-top: 10px; font-weight: 700; }
+.context-completion dd { margin: 3px 0 0; white-space: pre-wrap; }
 .context-notice { min-height: 18px; color: var(--saved-action); }
 .context-notice.is-error { color: #a13c35; }
 #context-memory textarea { caret-color: var(--saved-action); }

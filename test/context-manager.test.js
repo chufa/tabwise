@@ -16,11 +16,14 @@ function fixture() {
   let resolveModel;
   let calls = 0;
   const settings = { aiProvider: "ollama", ollamaEndpoint: "http://127.0.0.1:11434", ollamaModel: "fixture" };
+  let searchSource = { title: "搜索资料", url: "https://search.test/article" };
   const deps = { getTabs: async () => tabs, getWindowId: async () => 2, getWorkspaces: async () => [],
-    getSettings: async () => settings, fetchOllama: async () => { calls++; return new Promise((resolve) => { resolveModel = resolve; }); } };
+    getSettings: async () => settings, fetchOllama: async () => { calls++; return new Promise((resolve) => { resolveModel = resolve; }); },
+    resolveSearchSource: async () => searchSource };
   const manager = createContextManager(deps);
   return { manager, local, deps, settings, setTabs: (value) => { tabs = value; }, fail: () => { failure = true; },
-    get reads() { return reads; }, get calls() { return calls; }, reply: (brief) => resolveModel({ response: JSON.stringify(brief) }) };
+    get reads() { return reads; }, get calls() { return calls; }, setSearchSource: (value) => { searchSource = value; },
+    reply: (brief) => resolveModel({ response: JSON.stringify(brief) }) };
 }
 const call = (manager, type, payload = {}, owner = sender) => manager.handle({ type, ...payload }, owner);
 const fields = { name: "调研", goal: "核对恢复限制" };
@@ -140,4 +143,21 @@ test("disconnect cancels running snapshots and browser schema rejection cannot b
   f.manager.disconnect(preview.snapshot.id, sender);
   await assert.rejects(call(f.manager, "acceptContextBrief", { snapshotId: preview.snapshot.id, answer: answer(preview.snapshot) }), /预览/);
   assert.equal(f.local.contextTasks[0].acceptedBrief, undefined);
+});
+
+test("explicit search attachment rereads a safe source and related candidates never include unrelated or private tabs", async () => {
+  const f = fixture();
+  const { task } = await call(f.manager, "createContextTask", { fields });
+  const attached = await call(f.manager, "attachSearchContextSource", { taskId: task.id, revision: 1, result: { id: "current" }, confirm: true });
+  assert.equal(attached.task.sources[0].url, "https://search.test/article");
+  assert.equal((await call(f.manager, "attachSearchContextSource", { taskId: task.id, revision: 2, result: { id: "again" }, confirm: true })).duplicate, true);
+  f.setTabs([
+    { id: 1, windowId: 2, title: "同站资料", logicalUrl: "https://search.test/other" },
+    { id: 2, windowId: 2, title: "其他页面", logicalUrl: "https://unrelated.test/" },
+    { id: 3, windowId: 2, title: "隐私页面", incognito: true, logicalUrl: "https://search.test/private" }
+  ]);
+  const related = await call(f.manager, "prepareContextSources", { kind: "related", taskId: task.id });
+  assert.deepEqual(related.sources.map((source) => source.url), ["https://search.test/other"]);
+  f.setSearchSource({ title: "Bad", url: "chrome://settings" });
+  await assert.rejects(call(f.manager, "attachSearchContextSource", { taskId: task.id, revision: 2, result: {}, confirm: true }), /网址/);
 });

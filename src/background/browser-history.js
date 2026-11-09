@@ -1,4 +1,4 @@
-import { domainForUrl } from "../shared/policy.js";
+import { domainForUrl, matchesDomain } from "../shared/policy.js";
 
 export const HISTORY_WINDOW_MS = 14 * 86_400_000;
 export const HISTORY_LIMIT = 10_000;
@@ -58,15 +58,17 @@ export function createBrowserHistory({ getSettings, changeSettings, changed = ()
       cache = result;
     }
     const timestamp = now();
-    const pages = cache.items.filter((item) => /^https?:\/\//i.test(item.url || "")
-      && Number(item.lastVisitTime) >= timestamp - HISTORY_WINDOW_MS && Number(item.lastVisitTime) <= timestamp)
+    const excluded = settings.historyExcludedDomains || [];
+    const recent = cache.items.filter((item) => /^https?:\/\//i.test(item.url || "")
+      && Number(item.lastVisitTime) >= timestamp - HISTORY_WINDOW_MS && Number(item.lastVisitTime) <= timestamp);
+    const pages = recent.filter((item) => !matchesDomain(domainForUrl(item.url), excluded))
       .map((item) => ({
         id: `history:${item.id}`, historyId: item.id, title: item.title || item.url,
         url: item.url, domain: domainForUrl(item.url), source: "history", status: "visited",
-        lastAccessed: item.lastVisitTime, lastVisited: item.lastVisitTime
+        lastAccessed: item.lastVisitTime, lastVisited: item.lastVisitTime, visitCount: Number(item.visitCount) || 0
       }));
     return { pages, status: { state: cache.error ? "error" : "on", count: pages.length,
-      truncated: Boolean(cache.truncated), error: cache.error } };
+      excludedCount: recent.length - pages.length, truncated: Boolean(cache.truncated), error: cache.error } };
   }
   async function setEnabled(enabled) {
     if (enabled && !await permitted()) throw new Error("请先允许读取浏览器历史记录。");

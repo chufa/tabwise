@@ -136,6 +136,18 @@ test("catalog paginates all unique URLs and merges nonmatching live titles with 
   assert.equal(searchPageMemory(items, "", 30, { includeEmpty: true, source: "history", status: "visited" }).length, 30);
 });
 
+test("filters by exact domain and time, and can prioritize recent or frequent local results", () => {
+  const now = 1_800_000_000_000;
+  const items = [
+    { id: "old", title: "浏览器研究", url: "https://docs.test/old", domain: "docs.test", source: "history", status: "visited", lastAccessed: now - 8 * 86_400_000, visitCount: 50 },
+    { id: "recent", title: "浏览器研究", url: "https://docs.test/recent", domain: "docs.test", source: "history", status: "visited", lastAccessed: now - 60_000, visitCount: 2 },
+    { id: "frequent", title: "浏览器研究", url: "https://other.test/frequent", domain: "other.test", source: "history", status: "visited", lastAccessed: now - 86_400_000, visitCount: 80 }
+  ];
+  assert.deepEqual(searchPageMemory(items, "liulanqi", 30, { domain: "docs.test", periodDays: 7, now }).map((page) => page.id), ["recent"]);
+  assert.equal(searchPageMemory(items, "liulanqi", 30, { sort: "recent", now })[0].id, "recent");
+  assert.equal(searchPageMemory(items, "liulanqi", 30, { sort: "frequent", now })[0].id, "frequent");
+});
+
 test("explains a safe suspension candidate without overriding protection", () => {
   const candidate = buildSuspendCandidate({
     id: 7,

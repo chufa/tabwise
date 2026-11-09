@@ -77,6 +77,18 @@ main { margin-top: 18px; }
 .history-search-control .hint { margin-bottom: 0; }
 .search-summary { margin: 8px 0; font-size: 12px; color: inherit; }
 .search-pagination { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; font-size: 12px; }
+.search-preset-row { display: flex; align-items: end; gap: 10px; margin: 10px 0; }
+.search-preset-row label, .history-search-policy label { display: grid; flex: 1; gap: 5px; min-width: 0; color: #274b5d; font-size: 12px; font-weight: 760; }
+.search-preset-row select, .history-search-policy textarea { width: 100%; min-width: 0; border: 1px solid #b9ccd2; border-radius: 6px; padding: 7px; background: #fff; color: inherit; font-size: 12px; }
+.history-search-policy { margin: 0 0 12px; }
+.history-search-policy textarea { resize: vertical; line-height: 1.5; }
+.result-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 7px; }
+[data-search-result].is-selected { background: #effaf7; outline: 2px solid #63c4b5; outline-offset: -2px; }
+@media (max-width: 360px) {
+  .result { align-items: flex-start; }
+  .result-actions { display: grid; gap: 4px; justify-items: end; }
+  .search-preset-row { align-items: center; flex-wrap: wrap; }
+}
 .badge, .timeline-kind { flex: 0 0 auto; color: #087268; font-size: 11px; font-weight: 760; }
 .resource-value { flex: 0 0 auto; color: #12655f; font-size: 12px; font-variant-numeric: tabular-nums; font-weight: 780; }
 .action-button { flex: 0 0 auto; border: 1px solid #b9ccd2; border-radius: 6px; padding: 6px 8px; background: #fff; color: #12655f; font-size: 11px; font-weight: 760; transition: background .16s ease-out, border-color .16s ease-out; }
@@ -119,6 +131,9 @@ button:disabled { cursor: default; opacity: .5; }
   .health-list span, .health-list small { color: #a8bdc7; }
   .search-field, .ai-request-field { color: #b9e5dd; }
   .search-field input, .ai-request-field input, .ai-request-field select, .action-button { border-color: #3d5661; background: #172b37; color: #e8f1f4; }
+  .search-preset-row label, .history-search-policy label { color: #b9e5dd; }
+  .search-preset-row select, .history-search-policy textarea { border-color: #3d5661; background: #172b37; color: #e8f1f4; }
+  [data-search-result].is-selected { background: #213d47; outline-color: #5e9a92; }
   .search-field input::placeholder, .ai-request-field input::placeholder { color: #94aab4; }
   .ai-brief { border-color: #314854; color: #c5d8df; }
   .ai-page, .ai-theme { border-color: #314854; }

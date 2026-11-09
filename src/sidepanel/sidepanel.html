@@ -56,12 +56,26 @@
               <label>状态<select id="search-status"><option value="all">全部状态</option><option value="open">已打开</option><option value="protected">已保护</option><option value="suspended">休眠中</option><option value="saved">已保存</option><option value="visited">浏览历史</option></select></label>
               <label>窗口<select id="search-window"><option value="">全部窗口</option></select></label>
               <label>工作区<select id="search-workspace"><option value="">全部工作区</option></select></label>
+              <label>时间<select id="search-period"><option value="0">不限时间</option><option value="1">今天</option><option value="3">近 3 天</option><option value="7">近 7 天</option><option value="14">近 14 天</option></select></label>
+              <label>排序<select id="search-sort"><option value="relevance">相关度</option><option value="recent">最近访问</option><option value="frequent">常访问</option></select></label>
+              <label>域名<input id="search-domain" type="search" maxlength="253" placeholder="例如：developer.chrome.com"></label>
+              <label>加入任务<select id="search-context-task"><option value="">不加入任务</option></select></label>
             </div></details>
             <p id="search-hint" class="hint">支持中文、拼音和英文纠错。相同网址合并展示，搜索仅在本地进行。</p>
+            <div class="search-preset-row">
+              <label>常用筛选<select id="search-preset"><option value="">选择常用筛选</option></select></label>
+              <button id="save-search-preset" class="quiet-button" type="button">保存当前筛选</button>
+              <button id="remove-search-preset" class="quiet-button" type="button" disabled>删除</button>
+            </div>
             <div class="history-search-control">
               <div><strong>近两周浏览历史</strong><p id="history-search-status" class="hint" role="status">开启后可搜索浏览器已有的历史记录，仅在本地使用。</p></div>
               <button id="toggle-history-search" class="quiet-button" type="button">开启</button>
             </div>
+            <details class="history-search-policy tool-disclosure"><summary>历史隐私与缓存</summary>
+              <label>不纳入的域名（每行一个）<textarea id="history-excluded-domains" rows="3" maxlength="2000" placeholder="例如：bank.example.com"></textarea></label>
+              <p id="history-policy-hint" class="hint">排除项只影响 TabWise 的本地搜索，不会删除浏览器历史。</p>
+              <div class="saved-actions"><button id="save-history-policy" class="action-button" type="button">保存排除域名</button><button id="clear-history-cache" class="quiet-button" type="button">清空内存缓存</button></div>
+            </details>
             <div class="search-summary"><span id="search-count" role="status" aria-live="polite"></span></div>
             <div id="search-results" class="results empty-state" aria-busy="true">正在读取页面…</div>
             <nav id="search-pagination" class="search-pagination" aria-label="搜索结果分页" hidden>

@@ -133,12 +133,17 @@ export function sortTabs(tabs, sort = "recent") {
 export function searchPageMemory(pages, query, limit = 30, options = {}) {
   const groups = queryGroups(query, Boolean(options.semantic));
   if (!groups.length && !options.includeEmpty) return options.withTotal ? { results: [], total: 0 } : [];
+  const now = Number(options.now) || Date.now();
   const newestAccess = pages.reduce((newest, page) => Math.max(newest, Number(page.lastAccessed || page.createdAt || 0)), 0);
+  const periodDays = [1, 3, 7, 14].includes(Number(options.periodDays)) ? Number(options.periodDays) : 0;
+  const domain = normalize(options.domain).replaceAll(" ", "");
 
   const filtered = pages.filter((page) => (!options.source || options.source === "all" || page.source === options.source)
     && (!options.workspaceId || page.workspaceId === options.workspaceId)
     && (!options.windowId || page.windowId === Number(options.windowId))
-    && (!options.status || options.status === "all" || (options.status === "suspended" ? page.status === "suspended" : page.status === options.status)));
+    && (!options.status || options.status === "all" || (options.status === "suspended" ? page.status === "suspended" : page.status === options.status))
+    && (!domain || normalize(page.domain).replaceAll(" ", "") === domain)
+    && (!periodDays || Number(page.lastAccessed || page.createdAt || 0) >= now - periodDays * 86_400_000));
   const ranked = filtered
     .map((original) => {
       const compiled = original._search ? original : compilePage(original);
@@ -163,14 +168,20 @@ export function searchPageMemory(pages, query, limit = 30, options = {}) {
       };
     })
     .filter(Boolean)
-    .sort((left, right) => right.score - left.score || Number(right.lastAccessed || 0) - Number(left.lastAccessed || 0));
+    .sort((left, right) => {
+      if (options.sort === "recent") return Number(right.lastAccessed || 0) - Number(left.lastAccessed || 0) || right.score - left.score;
+      if (options.sort === "frequent") return Number(right.visitCount || 0) - Number(left.visitCount || 0)
+        || Number(right.lastAccessed || 0) - Number(left.lastAccessed || 0) || right.score - left.score;
+      return right.score - left.score || Number(right.lastAccessed || 0) - Number(left.lastAccessed || 0);
+    });
   // Preserve every source for a matched URL, even when an older title was the
   // only matching title. Keep the matching primary result for open validation.
   const provenance = new Map();
   if (options.deduplicate) for (const page of filtered) {
     const source = { id: page.id, source: page.source, workspaceId: page.workspaceId, workspaceName: page.workspaceName,
       checkpointId: page.checkpointId, tabId: page.tabId, windowId: page.windowId, status: page.status,
-      active: page.active, lastAccessed: page.lastAccessed, lastVisited: page.lastVisited };
+      active: page.active, pinned: page.pinned, lastAccessed: page.lastAccessed, lastVisited: page.lastVisited,
+      visitCount: page.visitCount };
     if (!provenance.has(page.url)) provenance.set(page.url, []);
     provenance.get(page.url).push(source);
   }

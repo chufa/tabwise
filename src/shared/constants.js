@@ -33,6 +33,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   closedHistoryEnabled: true,
   closedHistoryDays: 7,
   browserHistorySearchEnabled: false,
+  historyExcludedDomains: [],
   trustedDomains: [],
   blockedDomains: [],
   manualDomains: [],

@@ -7,7 +7,8 @@ import { isExtensionPage } from "../shared/extension-page.js";
 
 export const CONTEXT_COMMANDS = new Set(["listContextTasks", "createContextTask", "updateContextTask", "deleteContextTask",
   "resumeContextTask", "prepareContextSources", "attachContextSources", "prepareContextBrief", "beginContextBrief",
-  "generateContextBrief", "acceptContextBrief", "cancelContextBrief", "adoptContextBrief", "exportContextTask"]);
+  "generateContextBrief", "acceptContextBrief", "cancelContextBrief", "adoptContextBrief", "exportContextTask",
+  "attachSearchContextSource"]);
 const find = (tasks, id) => {
   const task = tasks.find((item) => item.id === id);
   if (!task) throw new Error("任务已删除，请刷新列表。");
@@ -24,7 +25,7 @@ const selected = (ids, items) => {
 const requireConfirm = (confirm) => { if (confirm !== true) throw new Error("请明确确认此次操作。"); };
 
 export function createContextManager({ getTabs, getWindowId, getWorkspaces, getSettings, fetchOllama,
-  getModelConfig = async () => modelRecipient(await getSettings()), generateModel }) {
+  getModelConfig = async () => modelRecipient(await getSettings()), generateModel, resolveSearchSource }) {
   // Drafts belong to the currently open document. Restart always invalidates them.
   const snapshots = new Map();
   const authorize = (sender) => {
@@ -69,10 +70,22 @@ export function createContextManager({ getTabs, getWindowId, getWorkspaces, getS
     snapshot.state = "ready";
     return { ok: true, brief };
   };
-  const candidates = async (kind, workspaceId, windowId) => {
+  const candidates = async (kind, workspaceId, windowId, relatedUrls = []) => {
     if (kind === "current") return (await getTabs()).filter((tab) => tab.windowId === windowId && !tab.incognito).flatMap((tab) => {
       try { return [{ binding: tab.id, ...normalizeContextSource({ id: crypto.randomUUID(), title: tab.title, url: tab.logicalUrl || tab.url }) }]; } catch { return []; }
     });
+    if (kind === "related") {
+      const urls = new Set(relatedUrls);
+      const domains = new Set(relatedUrls.map((url) => { try { return new URL(url).hostname; } catch { return ""; } }).filter(Boolean));
+      return (await getTabs()).filter((tab) => !tab.incognito).flatMap((tab) => {
+        const url = tab.logicalUrl || tab.url;
+        try {
+          const source = normalizeContextSource({ id: crypto.randomUUID(), title: tab.title, url });
+          if (!urls.has(source.url) && !domains.has(new URL(source.url).hostname)) return [];
+          return [{ binding: tab.id, ...source }];
+        } catch { return []; }
+      });
+    }
     if (kind !== "workspace") throw new Error("资料范围无效。");
     const workspace = (await getWorkspaces()).find((item) => item.id === workspaceId);
     if (!workspace) throw new Error("工作区已变化，请重新选择。");
@@ -113,15 +126,17 @@ export function createContextManager({ getTabs, getWindowId, getWorkspaces, getS
         }
         case "prepareContextSources": {
           const windowId = sender.tab?.windowId ?? await getWindowId();
-          const sources = await candidates(m.kind, m.workspaceId, windowId);
-          const snapshot = remember({ kind: "sources", sourceKind: m.kind, workspaceId: m.workspaceId, windowId, sources }, sender);
+          const task = m.kind === "related" ? find(await getContextTasks(), m.taskId) : null;
+          const relatedUrls = task?.sources.map((source) => source.url) || [];
+          const sources = await candidates(m.kind, m.workspaceId, windowId, relatedUrls);
+          const snapshot = remember({ kind: "sources", sourceKind: m.kind, workspaceId: m.workspaceId, windowId, relatedUrls, sources }, sender);
           return { ok: true, id: snapshot.id, sources: sources.map(({ binding, ...source }) => source) };
         }
         case "attachContextSources": {
           requireConfirm(m.confirm);
           const snapshot = owned(m.previewId, sender, "sources"), chosen = selected(m.sourceIds, snapshot.sources);
           if (!chosen.length) throw new Error("请选择要加入的资料。");
-          const live = await candidates(snapshot.sourceKind, snapshot.workspaceId, snapshot.windowId);
+          const live = await candidates(snapshot.sourceKind, snapshot.workspaceId, snapshot.windowId, snapshot.relatedUrls);
           if (chosen.some((source) => !live.some((item) => item.binding === source.binding && item.url === source.url && item.title === source.title))) throw new Error("资料页面已变化，请重新预览。");
           const result = await changeContextTasks((tasks) => {
             owned(snapshot.id, sender, "sources");
@@ -134,6 +149,21 @@ export function createContextManager({ getTabs, getWindowId, getWorkspaces, getS
             tasks[tasks.indexOf(task)] = updated; return { ok: true, task: updated };
           });
           invalidate(snapshot); return result;
+        }
+        case "attachSearchContextSource": {
+          requireConfirm(m.confirm);
+          if (typeof resolveSearchSource !== "function") throw new Error("当前页面搜索不可用，请重新打开侧栏。");
+          const live = normalizeContextSource({ id: crypto.randomUUID(), ...await resolveSearchSource(m.result) });
+          return changeContextTasks((tasks) => {
+            const task = find(tasks, m.taskId);
+            if (task.revision !== m.revision) throw new Error("任务已变化，请重新读取。");
+            if (task.sources.some((source) => source.url === live.url)) return { ok: true, task, duplicate: true };
+            if (task.sources.length >= 20) throw new Error("每个任务最多 20 个资料。");
+            const updated = normalizeContextTask({ ...task, sources: [...task.sources, live], revision: task.revision + 1, updatedAt: Date.now(),
+              ...(task.acceptedBrief ? { acceptedBrief: { ...task.acceptedBrief, stale: true } } : {}) });
+            tasks[tasks.indexOf(task)] = updated;
+            return { ok: true, task: updated };
+          });
         }
         case "prepareContextBrief": {
           const task = find(await getContextTasks(), m.taskId);
