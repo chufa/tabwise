@@ -38,6 +38,15 @@
 .context-completion p { margin: 8px 0; color: var(--saved-muted); }
 .context-completion dt { margin-top: 10px; font-weight: 700; }
 .context-completion dd { margin: 3px 0 0; white-space: pre-wrap; }
+.context-evidence-sources { display: grid; gap: 7px; margin: 14px 0; padding: 0; border: 0; }
+.context-evidence-sources legend { padding: 0; font-weight: 700; }
+.context-evidence-sources label { display: flex; gap: 8px; align-items: flex-start; }
+.context-evidence-sources input { margin-top: 3px; }
+.context-evidence-preview, .context-evidence-draft { margin: 14px 0; }
+.context-evidence-preview details, .context-evidence-draft { padding: 12px; background: var(--saved-panel); }
+.context-evidence-preview p, .context-evidence-history p { white-space: pre-wrap; }
+.context-evidence-history article { padding: 12px 0; border-top: 1px solid var(--saved-line); }
+.context-evidence-history strong, .context-evidence-history small { display: block; }
 .context-notice { min-height: 18px; color: var(--saved-action); }
 .context-notice.is-error { color: #a13c35; }
 #context-memory textarea { caret-color: var(--saved-action); }

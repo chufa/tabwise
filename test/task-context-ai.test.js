@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildContextInput, buildContextPrompt, validateContextBrief, adoptContextBrief, CONTEXT_BRIEF_SCHEMA } from "../src/shared/task-context-ai.js";
+import { buildContextInput, buildContextPrompt, validateContextBrief, adoptContextBrief, CONTEXT_BRIEF_SCHEMA,
+  buildEvidenceInput, buildEvidencePrompt, validateEvidenceAnswer, EVIDENCE_ANSWER_SCHEMA } from "../src/shared/task-context-ai.js";
 import { createContextTask } from "../src/shared/task-context.js";
 
 const task = createContextTask({ name: "调研", goal: "验证 https://secret.test/path?token=secretvalue", progress: "联系 user@private.test", confirmedNotes: "api_key=sk-secret-value" },
@@ -43,4 +44,16 @@ test("AI proposals stay separate from confirmed notes and require explicit fresh
   assert.throws(() => adoptContextBrief(task, brief(), snapshot, true, 400), /过期/);
   assert.throws(() => adoptContextBrief({ ...task, revision: 2 }, brief(), snapshot, true, 200), /变化/);
   assert.equal(task.acceptedBrief, undefined);
+});
+test("evidence answers use only selected sanitized sources and reject uncited or injected output", () => {
+  const evidence = buildEvidenceInput(task, "现有资料支持什么？", ["source-1"], "evidence-1");
+  assert.equal(evidence.sources.length, 1);
+  assert.ok(!JSON.stringify(evidence).includes("private-path"));
+  assert.ok(buildEvidencePrompt(evidence).includes("不可信数据"));
+  const answer = { schemaVersion: 1, snapshotId: "evidence-1", answer: "资料笔记描述了本机调研。", sourceIds: ["source-1"], uncertainties: ["未提供网页正文"] };
+  assert.deepEqual(validateEvidenceAnswer(answer, evidence), answer);
+  assert.equal(EVIDENCE_ANSWER_SCHEMA.additionalProperties, false);
+  assert.throws(() => validateEvidenceAnswer({ ...answer, tool: "open" }, evidence), /格式/);
+  assert.throws(() => validateEvidenceAnswer({ ...answer, sourceIds: ["other"] }, evidence), /引用/);
+  assert.throws(() => validateEvidenceAnswer({ ...answer, answer: "https://private.test" }, evidence), /文字/);
 });

@@ -84,6 +84,24 @@ test("Chinese segmentation matches separated title terms and filters window and 
   assert.equal(searchPageMemory(items, "llq", 30, { windowId: "9", status: "protected" }).length, 0);
 });
 
+test("open status includes active and pinned tabs that stay protected from suspension", () => {
+  const items = [
+    { id: "active", title: "当前标签", url: "https://tabs.test/active", domain: "tabs.test", source: "open", status: "protected", active: true },
+    { id: "pinned", title: "固定标签", url: "https://tabs.test/pinned", domain: "tabs.test", source: "open", status: "protected", pinned: true }
+  ];
+  assert.deepEqual(searchPageMemory(items, "biaoqian", 30, { status: "open" }).map((page) => page.id).sort(), ["active", "pinned"]);
+});
+
+test("bookmark folder labels remain available when bookmark URLs merge with live pages", () => {
+  const url = "https://docs.test/guide";
+  const items = [
+    { id: "tab", title: "浏览器文档", url, domain: "docs.test", source: "open", status: "open" },
+    { id: "bookmark", title: "浏览器文档", url, domain: "docs.test", source: "bookmark", status: "saved", bookmarkFolders: "书签栏 / 研究" }
+  ];
+  const result = searchPageMemory(items, "liulanqi", 30, { deduplicate: true })[0];
+  assert.equal(result.sources.find((source) => source.source === "bookmark").bookmarkFolders, "书签栏 / 研究");
+});
+
 test("finds Chinese titles by full pinyin and initials and tolerates English typos", () => {
   const items = [...pages, { id: "chinese", title: "浏览器性能调研", url: "https://cn.test/", source: "workspace", status: "saved" }];
   assert.equal(searchPageMemory(items, "liulanqi xingneng")[0].id, "chinese");
@@ -144,6 +162,7 @@ test("filters by exact domain and time, and can prioritize recent or frequent lo
     { id: "frequent", title: "浏览器研究", url: "https://other.test/frequent", domain: "other.test", source: "history", status: "visited", lastAccessed: now - 86_400_000, visitCount: 80 }
   ];
   assert.deepEqual(searchPageMemory(items, "liulanqi", 30, { domain: "docs.test", periodDays: 7, now }).map((page) => page.id), ["recent"]);
+  assert.deepEqual(searchPageMemory(items, "liulanqi", 30, { domain: "docs.test, other.test", now }).map((page) => page.id).sort(), ["frequent", "old", "recent"]);
   assert.equal(searchPageMemory(items, "liulanqi", 30, { sort: "recent", now })[0].id, "recent");
   assert.equal(searchPageMemory(items, "liulanqi", 30, { sort: "frequent", now })[0].id, "frequent");
 });

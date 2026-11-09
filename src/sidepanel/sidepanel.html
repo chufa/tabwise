@@ -52,13 +52,13 @@
               <input id="page-search" type="search" autocomplete="off" placeholder="搜索打开的页面、保存的页面和浏览历史">
             </label>
             <details class="saved-tools tool-disclosure"><summary>筛选搜索范围</summary><div class="search-filters">
-              <label>来源<select id="search-source"><option value="all">全部来源</option><option value="open">打开页面</option><option value="suspended">休眠页面</option><option value="workspace">工作区</option><option value="checkpoint">恢复点</option><option value="recent">最近休眠</option><option value="closed">最近关闭</option><option value="history">近两周浏览历史</option></select></label>
+              <label>来源<select id="search-source"><option value="all">全部来源</option><option value="open">打开页面</option><option value="suspended">休眠页面</option><option value="workspace">工作区</option><option value="checkpoint">恢复点</option><option value="recent">最近休眠</option><option value="closed">最近关闭</option><option value="history">近两周浏览历史</option><option value="bookmark">浏览器书签</option></select></label>
               <label>状态<select id="search-status"><option value="all">全部状态</option><option value="open">已打开</option><option value="protected">已保护</option><option value="suspended">休眠中</option><option value="saved">已保存</option><option value="visited">浏览历史</option></select></label>
               <label>窗口<select id="search-window"><option value="">全部窗口</option></select></label>
               <label>工作区<select id="search-workspace"><option value="">全部工作区</option></select></label>
               <label>时间<select id="search-period"><option value="0">不限时间</option><option value="1">今天</option><option value="3">近 3 天</option><option value="7">近 7 天</option><option value="14">近 14 天</option></select></label>
               <label>排序<select id="search-sort"><option value="relevance">相关度</option><option value="recent">最近访问</option><option value="frequent">常访问</option></select></label>
-              <label>域名<input id="search-domain" type="search" maxlength="253" placeholder="例如：developer.chrome.com"></label>
+              <label>域名<input id="search-domain" type="search" maxlength="1000" placeholder="多个域名用逗号分隔"></label>
               <label>加入任务<select id="search-context-task"><option value="">不加入任务</option></select></label>
             </div></details>
             <p id="search-hint" class="hint">支持中文、拼音和英文纠错。相同网址合并展示，搜索仅在本地进行。</p>
@@ -70,6 +70,10 @@
             <div class="history-search-control">
               <div><strong>近两周浏览历史</strong><p id="history-search-status" class="hint" role="status">开启后可搜索浏览器已有的历史记录，仅在本地使用。</p></div>
               <button id="toggle-history-search" class="quiet-button" type="button">开启</button>
+            </div>
+            <div class="history-search-control">
+              <div><strong>浏览器书签</strong><p id="bookmark-search-status" class="hint" role="status">开启后可搜索书签栏和书签文件夹中的网页，仅在本地使用。</p></div>
+              <button id="toggle-bookmark-search" class="quiet-button" type="button">开启</button>
             </div>
             <details class="history-search-policy tool-disclosure"><summary>历史隐私与缓存</summary>
               <label>不纳入的域名（每行一个）<textarea id="history-excluded-domains" rows="3" maxlength="2000" placeholder="例如：bank.example.com"></textarea></label>

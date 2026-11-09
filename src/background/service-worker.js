@@ -3,6 +3,7 @@ import { directSuspensionBlockReason, domainForUrl, isExpectedSuspensionUrl, isI
 import { addRecentSuspension, addRecoveryCheckpoint, addWorkspace, applySyncMetadata, clearDiagnostics, clearLocalHistory, getActivity, getDiagnostics, getObservedAt, getRecentSuspensions, getRecord, getRecords, getRecoveryCheckpoints, getResourceReviews, getResourceSnapshots, getSettings, getSyncHistory, getWorkspaces, migrateStorage, previewSyncMetadata, putRecord, removeActivity, removePrimaryRecord, removeRecentSuspension, removeRecord, removeRecordsForTab, removeResourceSnapshot, reportDiagnostic, restoreSyncHistory, saveResourceSnapshots, saveSettings, syncMetadata, touchTab } from "../shared/storage.js";
 import { buildSuspendCandidate, createPageIndex, searchPageMemory } from "../shared/search.js";
 import { createBrowserHistory } from "./browser-history.js";
+import { createBrowserBookmarks } from "./browser-bookmarks.js";
 import { summarizeHeapSnapshots } from "../shared/resource.js";
 import { buildResourceReclaimPlan } from "../shared/insights.js";
 import { isExtensionPage, resolvePopupSender } from "../shared/extension-page.js";
@@ -55,7 +56,9 @@ globalThis.addEventListener?.("unhandledrejection", (event) => reportWorkerError
 const pageTracker = createPageTracker(extensionOrigin);
 const pageIndex = createPageIndex();
 const historyIndex = createPageIndex();
+const bookmarkIndex = createPageIndex();
 const browserHistory = createBrowserHistory({ getSettings, changeSettings, changed: () => { historyIndex.replace([]); stateChanged(); } });
+const browserBookmarks = createBrowserBookmarks({ getSettings, changeSettings, changed: () => { bookmarkIndex.replace([]); stateChanged(); } });
 let searchVersion = 0;
 let indexedVersion = -1;
 let indexedAt = 0;
@@ -74,6 +77,7 @@ function stateChanged(indexChanged = true) {
 }
 chrome.storage.onChanged?.addListener((changes) => {
   if (changes.settings) browserHistory.invalidate();
+  if (changes.settings) browserBookmarks.invalidate();
   const indexKeys = ["workspaces", "recoveryCheckpoints", "recentSuspensions", "closedPages", "suspensionRecords", "suspensionRestoreRecords", "lastActivity", "settings"];
 const displayKeys = [...indexKeys, "resourceSnapshots", "resourceReviews", "operationJournal", "restoreTasks", "batchTasks", "workspaceBindings", "temporaryTabProtection", "effectHistory", "backupManagement", "contextTasks"];
   if (Object.keys(changes).some((key) => displayKeys.includes(key))) stateChanged(Object.keys(changes).some((key) => indexKeys.includes(key)));
@@ -412,6 +416,7 @@ function sanitizeSettings(current, update) {
     // History opt-in is changed only by the permission-checked search command.
     browserHistorySearchEnabled: current.browserHistorySearchEnabled === true,
     historyExcludedDomains: Array.isArray(update.historyExcludedDomains) ? normalizeList(update.historyExcludedDomains) : current.historyExcludedDomains,
+    bookmarkSearchEnabled: current.bookmarkSearchEnabled === true,
     trustedDomains: Array.isArray(update.trustedDomains) ? normalizeList(update.trustedDomains) : current.trustedDomains,
     blockedDomains: Array.isArray(update.blockedDomains) ? normalizeList(update.blockedDomains) : current.blockedDomains,
     pauseUntil: Number.isFinite(pauseUntil) && pauseUntil > Date.now() ? pauseUntil : 0
@@ -422,7 +427,7 @@ const SEARCH_PRESETS_KEY = "searchPresets";
 function normalizeSearchPreset(value) {
   if (!value || typeof value !== "object") throw new Error("搜索筛选无效。");
   const text = (item, limit) => typeof item === "string" ? item.trim().slice(0, limit) : "";
-  const source = ["all", "open", "suspended", "workspace", "checkpoint", "recent", "closed", "history"].includes(value.source) ? value.source : "all";
+  const source = ["all", "open", "suspended", "workspace", "checkpoint", "recent", "closed", "history", "bookmark"].includes(value.source) ? value.source : "all";
   const status = ["all", "open", "protected", "suspended", "saved", "visited"].includes(value.status) ? value.status : "all";
   const periodDays = [0, 1, 3, 7, 14].includes(Number(value.periodDays)) ? Number(value.periodDays) : 0;
   const sort = ["relevance", "recent", "frequent"].includes(value.sort) ? value.sort : "relevance";
@@ -950,33 +955,50 @@ function buildPageMemory(dashboard, workspaces, checkpoints, recent, closed = []
   return [...new Map(pages.map((page) => [`${page.source}:${page.id}`, page])).values()];
 }
 
+async function currentTabSearchPages() {
+  const tabs = await logicalTabs();
+  const visibleTabs = tabs.flatMap((tab) => {
+    const url = tab.logicalUrl || tab.pendingUrl || tab.url;
+    if (tab.incognito || !/^https?:\/\//i.test(url || "")) return [];
+    return [{
+      ...tab, url, domain: domainForUrl(url), suspended: Boolean(tab.recordId || tab.discarded),
+      status: tab.recordId || tab.discarded ? "suspended" : tab.active || tab.pinned || tab.audible ? "protected" : "open"
+    }];
+  });
+  return buildPageMemory({ tabs: visibleTabs }, [], [], []);
+}
+
 async function searchPages(query, limit, options = {}, allowHistory = true) {
   const startedAt = performance.now();
   const settings = await getSettings();
   if (indexedVersion !== searchVersion || Date.now() - indexedAt >= 60_000) {
     if (!indexBuild) indexBuild = (async () => {
     const version = searchVersion;
-    const [tabs, workspaces, checkpoints, recent, closed] = await Promise.all([logicalTabs(), getWorkspaces(), getRecoveryCheckpoints(), getRecentSuspensions(), getClosedPages()]);
-    const dashboard = { tabs: tabs.filter((tab) => !tab.incognito && /^https?:\/\//i.test(tab.logicalUrl || "")).map((tab) => ({
-      ...tab, url: tab.logicalUrl, domain: domainForUrl(tab.logicalUrl), suspended: Boolean(tab.recordId || tab.discarded),
-      status: tab.recordId || tab.discarded ? "suspended" : tab.active || tab.pinned || tab.audible ? "protected" : "open"
-    })) };
-    pageIndex.replace(buildPageMemory(dashboard, workspaces, checkpoints, recent, closed));
+    const [livePages, workspaces, checkpoints, recent, closed] = await Promise.all([currentTabSearchPages(), getWorkspaces(), getRecoveryCheckpoints(), getRecentSuspensions(), getClosedPages()]);
+    pageIndex.replace([...livePages, ...buildPageMemory({ tabs: [] }, workspaces, checkpoints, recent, closed)]);
     indexedVersion = version;
     indexedAt = Date.now();
     })().finally(() => { indexBuild = null; });
     await indexBuild;
   }
+  // Tabs are cheap browser metadata and must reflect the live browser, not a
+  // worker cache that may have survived a missed event while the panel was closed.
+  const livePages = await currentTabSearchPages();
+  const savedPages = pageIndex.pages().filter((page) => !["open", "suspended"].includes(page.source));
   const history = allowHistory ? await browserHistory.snapshot() : { pages: [], status: { state: "off", count: 0 } };
+  const bookmarks = allowHistory ? await browserBookmarks.snapshot() : { pages: [], status: { state: "off", count: 0 } };
   if (allowHistory) historyIndex.replace(history.pages);
-  const result = searchPageMemory([...pageIndex.pages(), ...(allowHistory ? historyIndex.pages() : [])], query, limit,
+  if (allowHistory) bookmarkIndex.replace(bookmarks.pages);
+  const result = searchPageMemory([...livePages, ...savedPages, ...(allowHistory ? historyIndex.pages() : []), ...(allowHistory ? bookmarkIndex.pages() : [])], query, limit,
     { ...options, semantic: settings.semanticSearch, deduplicate: options.deduplicate === true });
-  return options.withTotal ? { ok: true, ...result, historyStatus: history.status, elapsedMs: Math.round(performance.now() - startedAt) } : result;
+  return options.withTotal ? { ok: true, ...result, historyStatus: history.status, bookmarkStatus: bookmarks.status,
+    elapsedMs: Math.round(performance.now() - startedAt) } : result;
 }
 
 async function openSearchResult(result) {
   if (!result || typeof result !== "object") return { ok: false, reason: "搜索结果无效" };
   if (result.source === "history") return openSavedPage(await browserHistory.resolve(result), { background: result.background === true });
+  if (result.source === "bookmark") return openSavedPage(await browserBookmarks.resolve(result), { background: result.background === true });
   if (result.source === "open") {
     const tab = await chrome.tabs.get(result.tabId);
     if (result.url && tab.url !== result.url) throw new Error("标签页已导航到其他页面，请重新搜索。");
@@ -1038,6 +1060,10 @@ async function resolveSearchSourceForContext(result) {
   }
   if (result.source === "history") {
     const page = await browserHistory.resolve(result);
+    return { title: page.title, url: page.url };
+  }
+  if (result.source === "bookmark") {
+    const page = await browserBookmarks.resolve(result);
     return { title: page.title, url: page.url };
   }
   if (result.source === "open") {
@@ -1402,7 +1428,8 @@ function handleMessage(message, sender, sendResponse) {
   }
   const searchUi = ["src/sidepanel/sidepanel.html", "src/popup/popup.html", "src/options/options.html"].some((path) => isExtensionPage(sender, path));
   const sidepanelSearchUi = isExtensionPage(sender, "src/sidepanel/sidepanel.html");
-  if ((["searchPageCatalog", "setHistorySearch", "pinSearchResult"].includes(message.type) || message.type === "openSearchResult" && message.result?.source === "history") && !searchUi) {
+  if ((["searchPageCatalog", "setHistorySearch", "setBookmarkSearch", "pinSearchResult"].includes(message.type)
+    || message.type === "openSearchResult" && ["history", "bookmark"].includes(message.result?.source)) && !searchUi) {
     sendResponse({ ok: false, reason: "请从 TabWise 查询页面操作。" });
     return false;
   }
@@ -1446,6 +1473,7 @@ function handleMessage(message, sender, sendResponse) {
     searchPages: () => searchPages(message.query, message.limit, filters, searchUi),
     searchPageCatalog: () => searchPages(message.query, message.limit, { ...filters, deduplicate: true, includeEmpty: true, withTotal: true, offset: message.offset }, searchUi),
     setHistorySearch: () => browserHistory.setEnabled(message.enabled === true),
+    setBookmarkSearch: () => browserBookmarks.setEnabled(message.enabled === true),
     clearHistorySearchCache: async () => { browserHistory.invalidate(); return { ok: true }; },
     getSearchPresets: async () => ({ ok: true, presets: await getSearchPresets() }),
     saveSearchPreset: () => saveSearchPreset(message.preset),

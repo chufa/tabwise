@@ -29,6 +29,8 @@ const call = (manager, type, payload = {}, owner = sender) => manager.handle({ t
 const fields = { name: "调研", goal: "核对恢复限制" };
 const answer = (snapshot) => ({ schemaVersion: 1, snapshotId: snapshot.id, summary: "继续调研", hypotheses: [], questions: [],
   nextSteps: [{ text: "核对资料", sourceIds: snapshot.input.sources.map((s) => s.sourceId) }] });
+const evidenceAnswer = (snapshot) => ({ schemaVersion: 1, snapshotId: snapshot.id, answer: "资料支持继续核对。",
+  sourceIds: snapshot.input.sources.map((source) => source.sourceId), uncertainties: ["尚未读取正文"] });
 
 test("context commands reject other surfaces before reading private memory; CRUD is durable and optimistic", async () => {
   const f = fixture();
@@ -160,4 +162,20 @@ test("explicit search attachment rereads a safe source and related candidates ne
   assert.deepEqual(related.sources.map((source) => source.url), ["https://search.test/other"]);
   f.setSearchSource({ title: "Bad", url: "chrome://settings" });
   await assert.rejects(call(f.manager, "attachSearchContextSource", { taskId: task.id, revision: 2, result: {}, confirm: true }), /网址/);
+});
+test("evidence answers are preview-owned, cited, explicitly saved, and become stale after task edits", async () => {
+  const f = fixture();
+  const { task } = await call(f.manager, "createContextTask", { fields });
+  const source = await call(f.manager, "attachSearchContextSource", { taskId: task.id, revision: 1, result: {}, confirm: true });
+  const preview = await call(f.manager, "prepareEvidenceAnswer", { taskId: task.id, question: "资料支持什么？", sourceIds: [source.task.sources[0].id] });
+  const pending = call(f.manager, "generateEvidenceAnswer", { snapshotId: preview.snapshot.id });
+  while (!f.calls) await Promise.resolve();
+  f.reply(evidenceAnswer(preview.snapshot));
+  const result = await pending;
+  await assert.rejects(call(f.manager, "saveEvidenceAnswer", { snapshotId: preview.snapshot.id, evidence: result.evidence, confirm: false }), /确认/);
+  const saved = await call(f.manager, "saveEvidenceAnswer", { snapshotId: preview.snapshot.id, evidence: result.evidence, confirm: true });
+  assert.equal(saved.task.evidenceAnswers[0].sourceIds[0], source.task.sources[0].id);
+  assert.equal(saved.task.evidenceAnswers[0].stale, false);
+  const updated = await call(f.manager, "updateContextTask", { taskId: task.id, revision: 3, patch: { progress: "补充记录" } });
+  assert.equal(updated.task.evidenceAnswers[0].stale, true);
 });

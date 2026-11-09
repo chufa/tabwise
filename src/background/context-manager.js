@@ -1,6 +1,7 @@
 import { getContextTasks, changeContextTasks } from "../shared/context-storage.js";
 import { createContextTask, updateContextTask, normalizeContextSource, normalizeContextTask, exportContextMarkdown } from "../shared/task-context.js";
-import { buildContextInput, buildContextPrompt, CONTEXT_BRIEF_SCHEMA, validateContextBrief, adoptContextBrief } from "../shared/task-context-ai.js";
+import { buildContextInput, buildContextPrompt, CONTEXT_BRIEF_SCHEMA, validateContextBrief, adoptContextBrief,
+  buildEvidenceInput, buildEvidencePrompt, EVIDENCE_ANSWER_SCHEMA, validateEvidenceAnswer } from "../shared/task-context-ai.js";
 import { buildOllamaRequest } from "../shared/ollama.js";
 import { modelRecipient, sameModel } from "../shared/ai-provider.js";
 import { isExtensionPage } from "../shared/extension-page.js";
@@ -8,7 +9,8 @@ import { isExtensionPage } from "../shared/extension-page.js";
 export const CONTEXT_COMMANDS = new Set(["listContextTasks", "createContextTask", "updateContextTask", "deleteContextTask",
   "resumeContextTask", "prepareContextSources", "attachContextSources", "prepareContextBrief", "beginContextBrief",
   "generateContextBrief", "acceptContextBrief", "cancelContextBrief", "adoptContextBrief", "exportContextTask",
-  "attachSearchContextSource"]);
+  "attachSearchContextSource", "prepareEvidenceAnswer", "beginEvidenceAnswer", "generateEvidenceAnswer",
+  "acceptEvidenceAnswer", "saveEvidenceAnswer", "cancelEvidenceAnswer"]);
 const find = (tasks, id) => {
   const task = tasks.find((item) => item.id === id);
   if (!task) throw new Error("任务已删除，请刷新列表。");
@@ -69,6 +71,15 @@ export function createContextManager({ getTabs, getWindowId, getWorkspaces, getS
     if (!snapshots.has(snapshot.id) || snapshot.controller.signal.aborted) throw new Error("生成已停止。");
     snapshot.state = "ready";
     return { ok: true, brief };
+  };
+  const acceptEvidence = async (snapshot, answer) => {
+    if (!snapshots.has(snapshot.id) || snapshot.state !== "generating") throw new Error("请先开始生成证据回答。");
+    await currentTask(snapshot);
+    const evidence = validateEvidenceAnswer(answer, snapshot.input);
+    if (!sameModel(await getModelConfig(), snapshot)) throw new Error("模型设置已变化，请重新预览接收方。");
+    if (!snapshots.has(snapshot.id) || snapshot.controller.signal.aborted) throw new Error("生成已停止。");
+    snapshot.state = "ready";
+    return { ok: true, evidence };
   };
   const candidates = async (kind, workspaceId, windowId, relatedUrls = []) => {
     if (kind === "current") return (await getTabs()).filter((tab) => tab.windowId === windowId && !tab.incognito).flatMap((tab) => {
@@ -214,6 +225,65 @@ export function createContextManager({ getTabs, getWindowId, getWorkspaces, getS
             tasks[tasks.indexOf(task)] = updated; return { ok: true, task: updated };
           });
           invalidate(snapshot); return result;
+        }
+        case "prepareEvidenceAnswer": {
+          const task = find(await getContextTasks(), m.taskId);
+          const snapshot = remember({ kind: "evidence", taskId: task.id, revision: task.revision, ...await getModelConfig(), state: "preview" }, sender);
+          snapshot.input = buildEvidenceInput(task, m.question, m.sourceIds, snapshot.id);
+          return { ok: true, snapshot: { id: snapshot.id, input: snapshot.input, expiresAt: snapshot.expiresAt }, provider: snapshot.provider,
+            model: snapshot.model, endpoint: snapshot.endpoint, prompt: buildEvidencePrompt(snapshot.input), schema: EVIDENCE_ANSWER_SCHEMA };
+        }
+        case "beginEvidenceAnswer": {
+          const snapshot = owned(m.snapshotId, sender, "evidence");
+          if (snapshot.provider !== "browser") throw new Error("模型接收方不匹配。");
+          await begin(snapshot); return { ok: true };
+        }
+        case "generateEvidenceAnswer": {
+          const snapshot = owned(m.snapshotId, sender, "evidence");
+          if (snapshot.provider === "browser") throw new Error("模型接收方不匹配。");
+          await begin(snapshot);
+          try {
+            if (generateModel) {
+              const result = await generateModel(snapshot, buildEvidencePrompt(snapshot.input), EVIDENCE_ANSWER_SCHEMA,
+                { signal: snapshot.controller.signal, maxTokens: 1800 });
+              return { ...await acceptEvidence(snapshot, result.answer), latencyMs: result.latencyMs, usage: result.usage };
+            }
+            const request = buildOllamaRequest(buildEvidencePrompt(snapshot.input), snapshot.model, EVIDENCE_ANSWER_SCHEMA);
+            request.options.num_predict = 1800;
+            const body = await fetchOllama(snapshot.endpoint, "/api/generate", {
+              method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request)
+            }, 60_000, snapshot.controller.signal);
+            return await acceptEvidence(snapshot, body?.response);
+          } catch (error) { invalidate(snapshot); throw error; }
+        }
+        case "acceptEvidenceAnswer": {
+          const snapshot = owned(m.snapshotId, sender, "evidence");
+          if (snapshot.provider !== "browser") throw new Error("模型接收方不匹配。");
+          return acceptEvidence(snapshot, m.answer);
+        }
+        case "saveEvidenceAnswer": {
+          const snapshot = owned(m.snapshotId, sender, "evidence");
+          if (snapshot.state !== "ready") throw new Error("请先生成并审阅证据回答。");
+          requireConfirm(m.confirm);
+          const result = await changeContextTasks((tasks) => {
+            owned(snapshot.id, sender, "evidence");
+            const task = find(tasks, snapshot.taskId);
+            if (task.revision !== snapshot.revision) throw new Error("任务已变化，请重新预览。");
+            const evidence = validateEvidenceAnswer(m.evidence, snapshot.input);
+            const item = { id: crypto.randomUUID(), question: snapshot.input.question, answer: evidence.answer,
+              sourceIds: evidence.sourceIds, uncertainties: evidence.uncertainties, createdAt: Date.now(),
+              provider: snapshot.provider, model: snapshot.model, stale: false };
+            const updated = normalizeContextTask({ ...task, revision: task.revision + 1, updatedAt: Date.now(),
+              evidenceAnswers: [item, ...(task.evidenceAnswers || [])].slice(0, 12) });
+            tasks[tasks.indexOf(task)] = updated;
+            return { ok: true, task: updated, evidence: item };
+          });
+          invalidate(snapshot); return result;
+        }
+        case "cancelEvidenceAnswer": {
+          const snapshot = snapshots.get(m.snapshotId);
+          if (snapshot?.owner === sender.documentId) invalidate(snapshot);
+          return { ok: true };
         }
         default: throw new Error("任务记忆指令无效。");
       }

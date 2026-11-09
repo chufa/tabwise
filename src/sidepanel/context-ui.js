@@ -37,7 +37,7 @@ function download(name, content, type, suffix) {
 }
 
 export function createContextUI(host, { restoreUI, createLocalModel }) {
-  let tasks = [], workspaces = [], task, dirty = false, prepared, draft, picker, sourceSelection;
+  let tasks = [], workspaces = [], task, dirty = false, prepared, draft, evidencePrepared, evidenceDraft, picker, sourceSelection;
   let version = 0, busy = false, writing = false, controller, session, port;
   host.innerHTML = `<div class="section-heading"><h2>继续你的工作</h2><button class="primary-button" type="button" data-context="new">新建任务</button></div>
     <p class="saved-hint">记住目标、进度和资料，下次回来从这里继续。</p>
@@ -61,8 +61,9 @@ export function createContextUI(host, { restoreUI, createLocalModel }) {
   const reset = () => {
     version++;
     if (prepared) send("cancelContextBrief", { snapshotId: prepared.snapshot.id }).catch(() => {});
+    if (evidencePrepared) send("cancelEvidenceAnswer", { snapshotId: evidencePrepared.snapshot.id }).catch(() => {});
     controller?.abort(); session?.destroy?.(); port?.disconnect();
-    controller = session = port = null; prepared = draft = null; busy = false;
+    controller = session = port = null; prepared = draft = evidencePrepared = evidenceDraft = null; busy = false;
     editor.querySelector(".context-preview")?.replaceChildren();
     editor.querySelector(".context-draft")?.replaceChildren();
     if (editor.querySelector('[data-context="stop"]')) editor.querySelector('[data-context="stop"]').hidden = true;
@@ -102,16 +103,21 @@ export function createContextUI(host, { restoreUI, createLocalModel }) {
       ${task ? `<nav class="sub-tabs" role="tablist" aria-label="任务步骤">
         <button id="context-tab-progress" role="tab" aria-controls="context-view-progress" data-view-button="progress" type="button">记录进度</button>
         <button id="context-tab-sources" role="tab" aria-controls="context-view-sources" data-view-button="sources" type="button">任务资料</button>
-        <button id="context-tab-ai" role="tab" aria-controls="context-view-ai" data-view-button="ai" type="button">AI 续接</button></nav>` : ""}
+        <button id="context-tab-ai" role="tab" aria-controls="context-view-ai" data-view-button="ai" type="button">AI 续接</button>
+        <button id="context-tab-evidence" role="tab" aria-controls="context-view-evidence" data-view-button="evidence" type="button">证据问答</button></nav>` : ""}
       <form class="context-form" novalidate>
       <div id="context-view-progress" ${task ? 'role="tabpanel" aria-labelledby="context-tab-progress" data-view="progress"' : ""}>
       <div class="context-fields"><label>任务名称<input name="name" maxlength="80" value="${e(task?.name || "")}" required placeholder="例如：Chrome 内存调研"></label>
+      <label>优先级<select name="priority"><option value="high" ${task?.priority === "high" ? "selected" : ""}>高</option><option value="medium" ${!task || task?.priority === "medium" ? "selected" : ""}>中</option><option value="low" ${task?.priority === "low" ? "selected" : ""}>低</option></select></label>
+      <label>截止日期<input name="dueAt" type="date" value="${e(task?.dueAt || "")}"></label>
+      <label>默认工作区<select name="workspaceId"><option value="">不绑定工作区</option>${workspaces.map((item) => `<option value="${e(item.id)}" ${task?.workspaceId === item.id ? "selected" : ""}>${e(item.name)}</option>`).join("")}</select></label>
       ${field("goal", "任务目标", task?.goal, 2000, 3, true)}
       ${field("progress", "当前进度", task?.progress, 4000)}
       <details><summary>确认记录、问题与下一步</summary><div class="context-fields">
       ${field("confirmedNotes", "用户确认的记录", task?.confirmedNotes, 4000)}
       ${field("questions", "未决问题（每行一项，最多 20 项）", task?.questions.join("\n"), 10020)}
-      ${field("nextSteps", "下一步（每行一项，最多 20 项）", task?.nextSteps.join("\n"), 10020)}</div></details></div>
+      ${field("nextSteps", "下一步（每行一项，最多 20 项）", task?.nextSteps.join("\n"), 10020)}
+      ${field("todos", "待办（[x] 表示完成，每行一项）", task?.todos.map((item) => `${item.completed ? "[x]" : "[ ]"} ${item.text}`).join("\n"), 15030)}</div></details></div>
       </div>
       ${task ? `<div id="context-view-sources" role="tabpanel" aria-labelledby="context-tab-sources" data-view="sources" hidden><h3>任务资料 · ${task.sources.length} 个</h3><p class="saved-hint">勾选本次交给 AI 的资料；默认不选。笔记和片段由你手动提供，插件不会读取网页正文。</p>
         <div class="context-sources">${task.sources.map((source, index) => `<div class="context-source" data-source-id="${e(source.id)}">
@@ -122,6 +128,7 @@ export function createContextUI(host, { restoreUI, createLocalModel }) {
         <label><input type="checkbox" data-source-remove>保存时移除此资料</label></details></div>`).join("") || '<p class="saved-hint">暂无资料，也可以只根据已记录的进度生成续接草稿。</p>'}</div>
         <div class="saved-actions"><button type="button" data-context="sources">选择资料加入任务</button>
         <button type="button" data-context="related-sources" ${task.sources.length ? "" : "disabled"}>推荐相关打开页面</button>
+        <button type="button" data-context="workspace" ${task.workspaceId ? "" : "disabled"}>打开默认工作区</button>
         <button type="button" data-context="restore" ${task.sources.length ? "" : "disabled"}>选择资料继续</button></div><div class="context-picker" hidden></div></div>` : ""}
       <div class="context-savebar"><button class="primary-button" type="submit">${task ? "保存进度" : "创建任务"}</button>
         ${task ? '<button type="button" data-context="reload">重新读取</button><span>编辑后保存到本机</span>' : '<button type="button" data-context="close">取消创建</button>'}</div>
@@ -134,6 +141,15 @@ export function createContextUI(host, { restoreUI, createLocalModel }) {
         <div class="context-preview"></div>
         <div class="saved-actions"><button class="primary-button" type="button" data-context="generate" disabled>生成续接草稿</button><button type="button" data-context="stop" hidden>停止生成</button></div>
         <div class="context-draft"></div>${accepted(task)}${handoffReview(task)}</div>
+      ${task ? `<div id="context-view-evidence" role="tabpanel" aria-labelledby="context-tab-evidence" data-view="evidence" hidden>
+        <h3>跨资料证据问答</h3><p class="saved-hint">只使用你勾选资料的标题、笔记和手动片段；不会读取网页正文。回答会标出引用与待核对项。</p>
+        <label>问题<textarea data-evidence-question maxlength="800" rows="3" placeholder="例如：这些资料是否支持当前恢复方案？"></textarea></label>
+        <fieldset class="context-evidence-sources"><legend>本次资料</legend>${task.sources.map((source, index) => `<label><input type="checkbox" data-evidence-source value="${e(source.id)}"><span>${index + 1}. ${e(source.title)}</span></label>`).join("") || "<p>请先在任务资料中添加页面。</p>"}</fieldset>
+        <div class="saved-actions"><button type="button" class="primary-button" data-context="evidence-preview" ${task.sources.length ? "" : "disabled"}>预览问答输入</button></div>
+        <div class="context-evidence-preview"></div><div class="saved-actions"><button type="button" class="primary-button" data-context="evidence-generate" disabled>生成证据回答</button><button type="button" data-context="evidence-stop" hidden>停止生成</button></div>
+        <div class="context-evidence-draft"></div>
+        <div class="context-evidence-history">${(task.evidenceAnswers || []).map((item) => `<article><strong>${e(item.question)}</strong><p>${e(item.answer)}</p><small>${item.sourceIds.length ? reference(task, item.sourceIds) : "无可用资料引用"}${item.uncertainties.length ? ` · 待核对：${e(item.uncertainties.join("；"))}` : ""}${item.stale ? " · 资料已变化" : ""}</small></article>`).join("")}</div>
+      </div>` : ""}
         <details class="context-handoff"><summary>导出与交接</summary><p class="saved-hint">复制或下载包含原始网址的上下文包，交给 AI 对话或 IDE。任务仅保存在本机。</p>
         <div class="saved-actions"><button type="button" data-context="copy">复制 Markdown</button><button type="button" data-context="markdown">下载 Markdown</button>
         <button type="button" data-context="json">导出任务 JSON</button><button type="button" data-context="archive">${task.status === "archived" ? "取消归档" : "归档任务"}</button></div>
@@ -210,6 +226,64 @@ export function createContextUI(host, { restoreUI, createLocalModel }) {
       }
     }
   };
+  const previewEvidence = async () => {
+    clean(); reset();
+    const question = editor.querySelector("[data-evidence-question]").value;
+    const sourceIds = [...editor.querySelectorAll("[data-evidence-source]:checked")].map((input) => input.value);
+    const result = await send("prepareEvidenceAnswer", { taskId: task.id, question, sourceIds });
+    evidencePrepared = result;
+    editor.querySelector(".context-evidence-preview").innerHTML = `<details open><summary>本次交给模型的问答输入</summary>
+      <p>接收方：${e(result.provider === "browser" ? "浏览器内置模型" : `${result.provider} · ${result.model}`)}</p>
+      <p>问题：${e(result.snapshot.input.question)}</p>${result.snapshot.input.sources.map((source) =>
+        `<p><strong>${e(source.title)}</strong> · ${e(source.domain)}<br>笔记：${e(source.note || "无")}<br>片段：${e(source.excerpt || "无")}</p>`).join("")}
+      <p>只发送以上资料，不含完整网址或网页正文。预览 10 分钟有效。</p></details>`;
+    editor.querySelector('[data-context="evidence-generate"]').disabled = false;
+    notice("问答输入已准备，请核对后生成。");
+  };
+  const showEvidence = () => {
+    const citations = reference(task, evidenceDraft.sourceIds);
+    editor.querySelector(".context-evidence-draft").innerHTML = `<h3>审阅证据回答</h3>
+      <label>回答<textarea data-evidence-answer maxlength="2400" rows="5">${e(evidenceDraft.answer)}</textarea></label>
+      <p class="context-citations">${citations}</p>
+      <p>待核对：${e(evidenceDraft.uncertainties.join("；") || "无")}</p>
+      <label class="context-confirm"><input type="checkbox" data-evidence-confirm>我已审阅，保存这条证据回答</label>
+      <div class="saved-actions"><button type="button" data-context="evidence-save">保存证据回答</button></div>`;
+  };
+  const generateEvidence = async () => {
+    if (!evidencePrepared || busy) return;
+    const current = version, input = evidencePrepared;
+    busy = true; controller = new AbortController();
+    port = chrome.runtime.connect({ name: "tabwise-context-ai" });
+    const activePort = port;
+    port.postMessage({ snapshotId: input.snapshot.id });
+    editor.querySelector('[data-context="evidence-generate"]').disabled = true;
+    editor.querySelector('[data-context="evidence-stop"]').hidden = false;
+    notice("正在生成证据回答…");
+    let activeSession;
+    try {
+      let result;
+      if (input.provider !== "browser") result = await send("generateEvidenceAnswer", { snapshotId: input.snapshot.id });
+      else {
+        await send("beginEvidenceAnswer", { snapshotId: input.snapshot.id });
+        activeSession = await createLocalModel();
+        if (current !== version) return;
+        session = activeSession;
+        const answer = await activeSession.prompt(input.prompt, { responseConstraint: input.schema, signal: controller.signal });
+        if (current !== version) return;
+        result = await send("acceptEvidenceAnswer", { snapshotId: input.snapshot.id, answer });
+      }
+      if (current !== version) return;
+      evidenceDraft = result.evidence; showEvidence(); notice("证据回答已生成，请核对引用与待核对项。");
+    } catch (error) {
+      if (current === version) { reset(); notice(`${error.message} 请重新预览后重试。`, true); }
+    } finally {
+      activeSession?.destroy?.(); activePort.disconnect();
+      if (current === version) {
+        busy = false; controller = session = port = null;
+        editor.querySelector('[data-context="evidence-stop"]').hidden = true;
+      }
+    }
+  };
   const openPicker = async (initialKind = "current") => {
     clean(); const hostPicker = editor.querySelector(".context-picker");
     sourceSelection?.destroy(); sourceSelection = null;
@@ -254,6 +328,14 @@ export function createContextUI(host, { restoreUI, createLocalModel }) {
   host.addEventListener("input", (event) => {
     if (event.target.matches(".context-search input")) { drawList(); return; }
     if (event.target.closest(".context-picker")) return;
+    if (event.target.matches("[data-evidence-source], [data-evidence-question]")) {
+      if (evidencePrepared) send("cancelEvidenceAnswer", { snapshotId: evidencePrepared.snapshot.id }).catch(() => {});
+      evidencePrepared = evidenceDraft = null;
+      editor.querySelector(".context-evidence-preview")?.replaceChildren();
+      editor.querySelector(".context-evidence-draft")?.replaceChildren();
+      if (editor.querySelector('[data-context="evidence-generate"]')) editor.querySelector('[data-context="evidence-generate"]').disabled = true;
+      return;
+    }
     if (event.target.closest(".context-form")) {
       if (event.target.matches("[data-model-source]")) {
         reset();
@@ -280,7 +362,7 @@ export function createContextUI(host, { restoreUI, createLocalModel }) {
     const action = button.dataset.context;
     let unlock;
     try {
-      if (action === "stop") { reset(); notice("生成已停止，请重新预览。"); return; }
+      if (action === "stop" || action === "evidence-stop") { reset(); notice("生成已停止，请重新预览。"); return; }
       if (action === "reload") {
         await refreshList(); const fresh = tasks.find((item) => item.id === task?.id);
         if (fresh) renderEditor(fresh); notice("已重新读取本地记录。"); return;
@@ -321,8 +403,19 @@ export function createContextUI(host, { restoreUI, createLocalModel }) {
         renderEditor(result.task); revealElement(editor.querySelector("#context-view-sources")); await refreshList(); notice("选定资料已加入任务，相同网址只保留一次。"); return;
       }
       if (action === "restore") return await restoreUI.open("context", task.id);
+      if (action === "workspace") return await restoreUI.open("workspace", task.workspaceId);
       if (action === "preview") return await preview();
       if (action === "generate") return await generate();
+      if (action === "evidence-preview") return await previewEvidence();
+      if (action === "evidence-generate") return await generateEvidence();
+      if (action === "evidence-save") {
+        if (!evidenceDraft || !evidencePrepared) return;
+        const evidence = { ...evidenceDraft, answer: editor.querySelector("[data-evidence-answer]").value };
+        const result = await send("saveEvidenceAnswer", { snapshotId: evidencePrepared.snapshot.id, evidence,
+          confirm: editor.querySelector("[data-evidence-confirm]").checked });
+        renderEditor(result.task); revealElement(editor.querySelector("#context-view-evidence")); await refreshList();
+        notice("证据回答已保存到本地任务。"); return;
+      }
       if (action === "adopt") {
         if (!draft || !prepared) return;
         const brief = structuredClone(draft);

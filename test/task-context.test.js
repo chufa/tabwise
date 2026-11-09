@@ -65,3 +65,12 @@ test("removing sources prunes adopted citations and exported hostile Markdown re
   assert.throws(() => updateContextTask(task, { sourceNotes: { "source-1": { url: "https://evil.test/" } } }, 1), /字段/);
   assert.throws(() => validateContextCapacity(Array.from({ length: 20 }, (_, index) => ({ id: String(index), data: "中".repeat(40000) }))), /2 MiB/);
 });
+test("removing sources also prunes evidence citations while retaining the reviewable answer", () => {
+  const task = createContextTask(fields, sources, 100);
+  task.evidenceAnswers = [{ id: "evidence-1", question: "支持什么？", answer: "仍需核对。", sourceIds: ["source-1"],
+    uncertainties: [], createdAt: 100, provider: "browser", model: "local", stale: false }];
+  const updated = updateContextTask(task, { sourceIds: [] }, 1);
+  assert.equal(updated.evidenceAnswers[0].answer, "仍需核对。");
+  assert.deepEqual(updated.evidenceAnswers[0].sourceIds, []);
+  assert.equal(updated.evidenceAnswers[0].stale, true);
+});

@@ -20,11 +20,14 @@ let searchVersion = 0;
 let searchPage = 0;
 let historyEnabled = false;
 let historyBusy = false;
+let bookmarkEnabled = false;
+let bookmarkBusy = false;
 const SEARCH_PAGE_SIZE = 30;
 let searchPresets = [];
 let contextTasks = [];
 let searchResults = [];
 let selectedResultIndex = -1;
+let historyPolicyDirty = false;
 let dashboard;
 let aiPrepared;
 let aiVersion = 0;
@@ -115,9 +118,9 @@ function renderHealth(health) {
 }
 
 function pageRow(page) {
-  const sourceLabels = { open: "打开页面", suspended: "休眠页面", workspace: "工作区", checkpoint: "恢复点", recent: "最近休眠", closed: "最近关闭", history: "浏览历史" };
+  const sourceLabels = { open: "打开页面", suspended: "休眠页面", workspace: "工作区", checkpoint: "恢复点", recent: "最近休眠", closed: "最近关闭", history: "浏览历史", bookmark: "浏览器书签" };
   const provenance = page.sources || [page];
-  const sources = [...new Set(provenance.map((item) => item.workspaceName ? `工作区：${item.workspaceName}` : sourceLabels[item.source] || item.source))];
+  const sources = [...new Set(provenance.map((item) => item.workspaceName ? `工作区：${item.workspaceName}` : item.bookmarkFolders ? `书签：${item.bookmarkFolders}` : sourceLabels[item.source] || item.source))];
   const live = provenance.find((item) => item.source === "open") || provenance.find((item) => item.source === "suspended");
   const lastVisited = Math.max(0, ...provenance.map((item) => Number(item.lastVisited || 0)));
   const state = {
@@ -265,7 +268,7 @@ async function refreshDashboard() {
   await Promise.all([taskUI.update(), restoreUI.update(), contextUI.update()]);
   renderSearchContextTasks(contextTaskResult.tasks || []);
   renderSearchPresets(searchPresetResult.presets || []);
-  $("#history-excluded-domains").value = (data.settings.historyExcludedDomains || []).join("\n");
+  if (!historyPolicyDirty) $("#history-excluded-domains").value = (data.settings.historyExcludedDomains || []).join("\n");
   for (const [selector, html] of [
     ["#search-window", [...new Set(data.tabs.map((tab) => tab.windowId))].map((id) => `<option value="${id}">窗口 ${id}</option>`).join("")],
     ["#search-workspace", workspaces.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join("")]
@@ -341,7 +344,7 @@ async function search() {
   if (version !== searchVersion) return;
   $("#search-results").setAttribute("aria-busy", "false");
   if (!catalog.ok) throw new Error(catalog.reason || "搜索暂时不可用");
-  const { results, total, historyStatus } = catalog;
+  const { results, total, historyStatus, bookmarkStatus } = catalog;
   searchResults = results;
   selectedResultIndex = -1;
   const pages = Math.max(1, Math.ceil(total / SEARCH_PAGE_SIZE));
@@ -353,6 +356,13 @@ async function search() {
     ? `已纳入 ${historyStatus.count.toLocaleString()} 个网址 · 最近 14 天${historyStatus.excludedCount ? ` · 已排除 ${historyStatus.excludedCount} 个网址` : ""}${historyStatus.truncated ? "，已达到 10,000 条上限" : ""}。`
     : historyStatus.state === "error" ? `暂时无法读取历史：${historyStatus.error}。其他页面仍可搜索。`
       : historyStatus.state === "permission-required" ? "历史权限已撤销。点击开启可重新授权。" : "开启后可搜索浏览器已有的历史记录，仅在本地使用。";
+  bookmarkEnabled = !["off", "permission-required"].includes(bookmarkStatus.state);
+  $("#toggle-bookmark-search").textContent = bookmarkEnabled ? "关闭" : "开启";
+  $("#toggle-bookmark-search").disabled = bookmarkBusy;
+  $("#bookmark-search-status").textContent = bookmarkStatus.state === "on"
+    ? `已纳入 ${bookmarkStatus.count.toLocaleString()} 个书签${bookmarkStatus.truncated ? "，已达到 10,000 条上限" : ""}。`
+    : bookmarkStatus.state === "error" ? `暂时无法读取书签：${bookmarkStatus.error}。其他页面仍可搜索。`
+      : bookmarkStatus.state === "permission-required" ? "书签权限已撤销。点击开启可重新授权。" : "开启后可搜索书签栏和书签文件夹中的网页，仅在本地使用。";
   const elapsed = Number(catalog.elapsedMs || performance.now() - startedAt);
   $("#search-count").textContent = `${query ? "找到" : "可查找"} ${total.toLocaleString()} 个页面${total ? ` · ${searchPage * SEARCH_PAGE_SIZE + 1}–${Math.min(total, (searchPage + 1) * SEARCH_PAGE_SIZE)}` : ""} · ${elapsed} ms`;
   $("#search-pagination").hidden = pages <= 1;
@@ -429,9 +439,11 @@ $("#save-history-policy").addEventListener("click", async () => {
   try {
     const settings = await chrome.runtime.sendMessage({ type: "updateSettings", settings: { historyExcludedDomains: domains } });
     $("#history-excluded-domains").value = (settings.historyExcludedDomains || []).join("\n");
+    historyPolicyDirty = false;
     searchPage = 0; await search(); setFeedback("历史排除域名已保存。");
   } catch (error) { setFeedback(error.message, true); }
 });
+$("#history-excluded-domains").addEventListener("input", () => { historyPolicyDirty = true; });
 $("#clear-history-cache").addEventListener("click", async () => {
   try {
     const result = await chrome.runtime.sendMessage({ type: "clearHistorySearchCache" });
@@ -439,8 +451,25 @@ $("#clear-history-cache").addEventListener("click", async () => {
     await search(); setFeedback("历史搜索内存缓存已清空。");
   } catch (error) { setFeedback(error.message, true); }
 });
+$("#toggle-bookmark-search").addEventListener("click", async () => {
+  const enable = !bookmarkEnabled;
+  bookmarkBusy = true;
+  $("#toggle-bookmark-search").disabled = true;
+  try {
+    if (enable && !await chrome.permissions.request({ permissions: ["bookmarks"] })) {
+      setFeedback("未获得书签权限，仍可搜索当前标签和保存页面。");
+      return;
+    }
+    const result = await chrome.runtime.sendMessage({ type: "setBookmarkSearch", enabled: enable });
+    if (!result.ok) throw new Error(result.reason);
+    if (!enable) await chrome.permissions.remove({ permissions: ["bookmarks"] });
+    searchPage = 0;
+    await search();
+  } catch (error) { setFeedback(error.message, true); }
+  finally { bookmarkBusy = false; $("#toggle-bookmark-search").disabled = false; }
+});
 chrome.permissions.onRemoved.addListener((permissions) => {
-  if (!permissions.permissions?.includes("history")) return;
+  if (!permissions.permissions?.some((permission) => ["history", "bookmarks"].includes(permission))) return;
   searchVersion++;
   $("#search-results").replaceChildren();
   searchPage = 0;

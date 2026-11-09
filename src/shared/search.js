@@ -136,13 +136,14 @@ export function searchPageMemory(pages, query, limit = 30, options = {}) {
   const now = Number(options.now) || Date.now();
   const newestAccess = pages.reduce((newest, page) => Math.max(newest, Number(page.lastAccessed || page.createdAt || 0)), 0);
   const periodDays = [1, 3, 7, 14].includes(Number(options.periodDays)) ? Number(options.periodDays) : 0;
-  const domain = normalize(options.domain).replaceAll(" ", "");
+  const domains = new Set(String(options.domain || "").split(/[\s,]+/).map((value) => normalize(value).replaceAll(" ", "")).filter(Boolean));
 
   const filtered = pages.filter((page) => (!options.source || options.source === "all" || page.source === options.source)
     && (!options.workspaceId || page.workspaceId === options.workspaceId)
     && (!options.windowId || page.windowId === Number(options.windowId))
-    && (!options.status || options.status === "all" || (options.status === "suspended" ? page.status === "suspended" : page.status === options.status))
-    && (!domain || normalize(page.domain).replaceAll(" ", "") === domain)
+    && (!options.status || options.status === "all" || (options.status === "open" ? ["open", "protected"].includes(page.status)
+      : options.status === "suspended" ? page.status === "suspended" : page.status === options.status))
+    && (!domains.size || domains.has(normalize(page.domain).replaceAll(" ", "")))
     && (!periodDays || Number(page.lastAccessed || page.createdAt || 0) >= now - periodDays * 86_400_000));
   const ranked = filtered
     .map((original) => {
@@ -181,7 +182,7 @@ export function searchPageMemory(pages, query, limit = 30, options = {}) {
     const source = { id: page.id, source: page.source, workspaceId: page.workspaceId, workspaceName: page.workspaceName,
       checkpointId: page.checkpointId, tabId: page.tabId, windowId: page.windowId, status: page.status,
       active: page.active, pinned: page.pinned, lastAccessed: page.lastAccessed, lastVisited: page.lastVisited,
-      visitCount: page.visitCount };
+      visitCount: page.visitCount, bookmarkFolders: page.bookmarkFolders };
     if (!provenance.has(page.url)) provenance.set(page.url, []);
     provenance.get(page.url).push(source);
   }

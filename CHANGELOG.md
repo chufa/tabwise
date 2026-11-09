@@ -4,6 +4,9 @@
 
 ### Features
 
+- Add opt-in local search across browser bookmark-bar and bookmark-folder webpages, with folder provenance and live-state revalidation before opening.
+- Add task priority, due dates, checklist items, default workspace links, and explicit evidence Q&A with schema-validated local citations.
+- Allow multi-domain page-search filtering alongside the existing local ranking controls.
 - Add time, exact-domain and relevance/recent/frequency search controls, saved local search presets, keyboard navigation, page pinning, and background opening.
 - Let users add an explicitly selected, revalidated search result to an active task; suggest related already-open pages from task-source domains.
 - Show a reviewable local handoff checklist after a user archives a task, without automatically changing any pages or workspaces.
